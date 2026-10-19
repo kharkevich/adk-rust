@@ -212,42 +212,20 @@ in 3.0: the option was never read.
 
 #### Background mode
 
-`extensions["openai"]["background"] = true` submits the response in the background.
-`poll_response` and `cancel_response` take the response ID from
-`provider_metadata["openai"]["response_id"]`.
+`extensions["openai"]["background"] = true` sends the request with `background: true`. The API
+answers a background submission with status `queued`, and `generate_content` fails on it with
+`model.openai_responses.invalid_terminal`, so in 3.0.0 a background response cannot be submitted
+through the `Llm` interface. `poll_response` (`GET /responses/{id}`) and `cancel_response`
+(`POST /responses/{id}/cancel`) work on a response ID the application already holds:
 
 ```rust
-use adk_core::{Content, GenerateContentConfig, Llm, LlmRequest};
-use adk_model::openai::{OpenAIResponsesClient, OpenAIResponsesConfig};
-use futures::StreamExt;
+use adk_model::openai::OpenAIResponsesClient;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENAI_API_KEY")?;
-    let client = OpenAIResponsesClient::new(OpenAIResponsesConfig::new(api_key, "gpt-5.6-luna"))?;
-
-    let mut config = GenerateContentConfig::default();
-    config.extensions.insert("openai".into(), serde_json::json!({ "background": true }));
-    let request = LlmRequest::new(
-        "gpt-5.6-luna",
-        vec![Content::new("user").with_text("Summarize the history of Rust in one paragraph.")],
-    )
-    .with_config(config);
-
-    let submitted = client.generate_content(request, false).await?.next().await.ok_or("no response")??;
-    let response_id = submitted
-        .provider_metadata
-        .as_ref()
-        .and_then(|metadata| metadata["openai"]["response_id"].as_str())
-        .ok_or("no response_id")?
-        .to_string();
-
-    let polled = client.poll_response(&response_id).await?;
+async fn finish(client: &OpenAIResponsesClient, response_id: &str) -> Result<(), adk_core::AdkError> {
+    let polled = client.poll_response(response_id).await?;
     let status = polled.provider_metadata.as_ref().and_then(|metadata| metadata["openai"]["status"].as_str());
-    println!("{response_id}: {status:?}");
-
-    if status != Some("completed") {
-        client.cancel_response(&response_id).await?;
+    if matches!(status, Some("queued" | "in_progress")) {
+        client.cancel_response(response_id).await?;
     }
     Ok(())
 }
@@ -260,7 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | [`examples/openai_responses/`](../examples/openai_responses/) | `OpenAIResponsesClient` through `Runner` and `LlmAgent`, with multi-turn sessions |
 | [`examples/openai_ws_minimal/`](../examples/openai_ws_minimal/) | WebSocket transport (`openai-ws`) |
 | [`examples/gemini_ws_outcomes/`](../examples/gemini_ws_outcomes/) | Gemini and Responses WebSocket stream outcomes: abandoned, incomplete, closed, and failed responses, handshake retry |
-| [`examples/openai_background/`](../examples/openai_background/) | Background mode, submit and poll |
+| [`examples/openai_background/`](../examples/openai_background/) | Background mode, submit and poll; the submission fails in 3.0.0 as described above |
 | [`examples/openai_conversations/`](../examples/openai_conversations/) | Conversations API lifecycle (`openai-conversations`) |
 | [`examples/openai_builtin_tools/`](../examples/openai_builtin_tools/) | Built-in tools such as image generation and web search |
 | [`examples/openai_deep_research/`](../examples/openai_deep_research/) | Deep research models |
@@ -667,8 +645,9 @@ The `openai` feature turns on `async-openai`'s `byot` feature. An application th
 
 ## Environment variables
 
-The snippets above read their keys from these variables. Only `GeminiModel::from_env` reads the
-environment itself; `BedrockClient::new` uses the AWS credential chain.
+The snippets above read their keys from these variables. Of the clients, `GeminiModel::from_env`
+reads credentials from the environment, `AnthropicClient` without a configured base URL reads
+`ANTHROPIC_BASE_URL`, and `BedrockClient::new` uses the AWS credential chain.
 
 | Provider | Variable |
 |----------|----------|
