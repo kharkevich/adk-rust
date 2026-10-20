@@ -331,7 +331,7 @@ via `InteractionOptions` (re-exported from `adk_model::gemini`):
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `store` | `true` | Interactions are stored server-side so stateful continuation and observability work out of the box. |
-| `stateful` | `true` | Multi-turn conversations continue via `previous_interaction_id`; only the current turn's contents are sent when chaining. |
+| `stateful` | `true` | Within one run, model calls after the first continue via `previous_interaction_id` and send only the latest user content; each new run sends the full transcript. |
 | `background` | `BackgroundMode::AgentTargetsOnly` | `background=true` for agent targets (Deep Research, long-running); `false` for model targets so chat turns stay low-latency. |
 | `poll_interval` | `1s` | How often a background interaction is polled until terminal. |
 
