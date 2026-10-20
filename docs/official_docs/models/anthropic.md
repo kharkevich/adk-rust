@@ -224,7 +224,7 @@ included, as a starting map for `send_with_headers` and `stream_with_headers`.
 |-----------|------|
 | Retries | `AnthropicClient` sets the SDK's own retries to zero; `RetryConfig` on the `adk-model` client is the only retry policy |
 | Redirects | The client returns a 3xx response as an error instead of following it |
-| Stream end | A stream must end with `message_stop` and a stop reason; otherwise it fails |
+| Stream end | A stream that ends before `message_stop` fails (`model.legacy`, `Internal`); a `message_stop` without a stop reason finishes with `FinishReason::Other` |
 | Final snapshot | The last streamed response carries the complete message with `provider_metadata.content_complete` set to `true`; replace the earlier text and thinking deltas with it |
 | Server tools and citations | Web search calls, results and citations are kept with the assistant turn and replayed natively on the next request; if the turn's text was edited afterwards, the turn is converted from its ADK parts instead |
 | Thinking replay | Signed `thinking` blocks, including the empty blocks returned under `display: "omitted"`, and `redacted_thinking` blocks are replayed unchanged; thinking without a signature is not sent |
