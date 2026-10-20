@@ -68,6 +68,7 @@ When streaming, the API emits a step-oriented SSE event model. The most common
 path is accumulating text fragments from `step.delta` events:
 
 ```rust
+use adk_gemini::interactions::InteractionSseEvent;
 use adk_gemini::{Gemini, Model};
 use futures::StreamExt;
 
@@ -80,8 +81,13 @@ async fn haiku(gemini: &Gemini) -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     while let Some(event) = stream.next().await {
-        if let Some(fragment) = event?.text_delta() {
+        let event = event?;
+        if let Some(fragment) = event.text_delta() {
             print!("{fragment}");
+        }
+        // The API closes the stream with a `data: [DONE]` frame that the client does not decode.
+        if matches!(event, InteractionSseEvent::InteractionCompleted { .. }) {
+            break;
         }
     }
     Ok(())
@@ -90,8 +96,9 @@ async fn haiku(gemini: &Gemini) -> Result<(), Box<dyn std::error::Error>> {
 
 Event types: `interaction.created`, `step.start`, `step.delta`, `step.stop`,
 `interaction.status_update`, `interaction.completed`, and `error`. Unknown
-future events deserialize into `InteractionSseEvent::Other` rather than failing
-the stream.
+future events deserialize into `InteractionSseEvent::Other`. After
+`interaction.completed` the API sends `event: done` with `data: [DONE]`, which the direct
+client yields as a deserialization error, so stop reading at `interaction.completed`.
 
 ## Server-side multi-turn
 
