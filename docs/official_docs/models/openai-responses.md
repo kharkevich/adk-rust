@@ -149,10 +149,8 @@ fn configs() -> [OpenAIResponsesConfig; 3] {
     [
         // API key and model.
         OpenAIResponsesConfig::new("sk-...", "gpt-5.6-luna"),
-        // With organization and project.
-        OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
-            .with_organization("org-...")
-            .with_project("proj-..."),
+        // With an organization (sent as `OpenAI-Organization`).
+        OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra").with_organization("org-..."),
         // Custom base URL, for proxies or compatible APIs.
         OpenAIResponsesConfig::new("sk-...", "gpt-5.6-terra")
             .with_base_url("https://my-proxy.example.com/v1"),
