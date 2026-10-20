@@ -83,7 +83,8 @@ async fn session(runner: &RealtimeRunner, pcm16_base64: &str, jpeg_base64: &str)
 
 The application layer. It wraps a `RealtimeRunner` and, as events flow, wires in:
 
-- **`SessionService`** — completed turns are appended to the session history.
+- **`SessionService`** — the model's completed turns are appended to the session history;
+  the user's transcribed speech is not.
 - **`MemoryService`** — queried at connect (for context) and written to per turn
   (configurable). See [Memory](memory.md).
 - **`EnhancedPluginManager`** — tool calls pass through `before_tool_call` /

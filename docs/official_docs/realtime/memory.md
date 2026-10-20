@@ -49,11 +49,15 @@ fn build(
 - **At connect**, the runner searches memory for the user with the query `"session context"`
   and carries the results into the session instruction (see
   [What is carried into a resumed session](#what-is-carried-into-a-resumed-session)).
-- **Per turn**, completed turns are written back with `MemoryService::add_session` when
-  `store_to_memory` is set, so the next session builds on this one.
+- **Per turn**, each completed model turn (its text, else its audio transcript) is appended to
+  the session when `persist_transcripts` is set and written to memory with
+  `MemoryService::add_session` when `store_to_memory` is set. The user's transcribed speech is
+  stored in neither.
 
-Any `MemoryService` works: the in-memory one for development, or the knowledge-graph backend
-below.
+The backend decides what a later session gets back. `InMemoryMemoryService` replaces a
+session's entries on every `add_session`, so it keeps only the latest turn, and it matches the
+session-start query word by word, so it rarely recalls anything at connect.
+`GraphMemoryService`, below, appends every turn and answers that query with a profile card.
 
 ## 2. The knowledge-graph backend
 
@@ -127,7 +131,7 @@ or items to the customer. Recall naturally — don't announce that you're saving
 | Need | Setup |
 |------|-------|
 | Each session starts fresh | No `memory_service` |
-| Continuity across sessions | An in-memory service or `GraphMemoryService`, with injection and storage |
+| Continuity across sessions | `GraphMemoryService`, with injection and storage |
 | An agent that curates what it knows | `GraphMemoryService` with the `remember` and `relate` tools |
 
 The `realtime_voice` example ("Mindfulness with Mia") uses the graph and both tools; see
