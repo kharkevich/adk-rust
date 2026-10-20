@@ -512,18 +512,22 @@ and non-streaming mode alike:
 | Terminal response that lacks a tool call the stream announced | `model.openai_responses.unfinished_stream` | `Internal` |
 | Unfinished, duplicate, or unnamed tool call | `model.openai_responses.invalid_terminal` or `invalid_identity` | `Internal` |
 
-A failure whose code is one of OpenAI's documented `response.error.code` values keeps it
-in `details.metadata["provider_error_code"]` and in the message, and sets the category:
+A failure whose error `code` or `type` is one of the values below keeps it in
+`details.metadata["provider_error_code"]` and in the message, and sets the category:
 
-| Provider code | Category | Retryable |
-|---------------|----------|-----------|
+| Provider code or type | Category | Retryable |
+|-----------------------|----------|-----------|
 | `rate_limit_exceeded` | `RateLimited` | Yes |
 | `server_error` | `Unavailable` | Yes |
-| `vector_store_timeout` | `Timeout` | Yes |
+| `vector_store_timeout`, `stream_timeout` | `Timeout` | Yes |
+| `invalid_api_key`, `authentication_error` | `Unauthorized` | No |
+| `permission_error` | `Forbidden` | No |
+| `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`, `context_length_exceeded`, `content_policy_violation`, `invalid_request_error` | `InvalidInput` | No |
 | `invalid_prompt`, `invalid_image*`, `image_*`, and the other image input codes | `InvalidInput` | No |
 
-Any other code, and every provider message, is dropped: a compatible provider's error
-text can echo request content.
+A failure with any other code, or with none, is `Unavailable` and retryable. Its code and
+every provider message are dropped: a compatible provider's error text can echo request
+content.
 
 ```rust
 use adk_core::AdkError;
