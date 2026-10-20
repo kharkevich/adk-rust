@@ -29,9 +29,9 @@ cargo run --manifest-path examples/realtime_tools/Cargo.toml
 
 A web voice app: the browser captures microphone PCM16 and plays the agent gaplessly with
 barge-in; the Rust server owns the session. Its [memory](memory.md) is a file-backed
-`GraphMemoryService`: the profile card is injected at session start, every turn is logged to
-the graph, and the agent records durable facts through the bridged `remember` and `relate`
-tools. A "User Memory Insights" panel reads and writes the same graph over `/api/memory`. It
+`GraphMemoryService`: the profile card is injected at session start, the agent's completed
+turns are logged to the graph, and the agent records durable facts through the bridged
+`remember` and `relate` tools. A "User Memory Insights" panel reads and writes the same graph over `/api/memory`. It
 also has a server-side `get_weather` tool.
 
 | Light | Dark |
@@ -66,7 +66,7 @@ A customer-support agent on OpenAI or Gemini with a themed (system, light, dark)
 cargo run --manifest-path examples/customer_service/Cargo.toml
 # → http://localhost:3066
 
-# headless smoke test (asks for a refund by text and checks that process_refund runs):
+# headless smoke test (asks for a refund by text, logs whether process_refund ran, and fails only without agent output):
 cargo run --manifest-path examples/customer_service/Cargo.toml -- probe openai
 cargo run --manifest-path examples/customer_service/Cargo.toml -- probe gemini
 
@@ -108,7 +108,8 @@ Read it for: using the dedicated translation models and a focused, minimal bridg
 3. **`customer_service`** — video, tools, and affective dialogue.
 4. **`live_translation`** — dedicated translation models.
 
-Each example's `README.md` lists its environment variables, including the model overrides
-`OPENAI_REALTIME_MODEL` and `GEMINI_REALTIME_MODEL` of the web examples.
+Each example's `README.md` lists its environment variables. `realtime_voice` and
+`customer_service` take model overrides in `OPENAI_REALTIME_MODEL` and `GEMINI_REALTIME_MODEL`;
+`live_translation` takes them in `OPENAI_TRANSLATE_MODEL` and `GEMINI_TRANSLATE_MODEL`.
 
 ← Back to the [Realtime overview](index.md)
