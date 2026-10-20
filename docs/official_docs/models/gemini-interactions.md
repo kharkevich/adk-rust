@@ -494,9 +494,15 @@ fn build(api_key: &str) -> anyhow::Result<LlmAgent> {
 
 If you leave a built-in tool **un-bypassed** while mixing it with function tools
 under the Interactions transport, request building returns an `AdkError` with
-category `InvalidInput` pointing you at `with_bypass_multi_tools_limit`. The
-function call id round-trips unchanged through the tool loop, exactly as with
-generateContent.
+category `InvalidInput` pointing you at `with_bypass_multi_tools_limit`.
+
+> **Note:** in 3.0.0 a function call does not complete through the runtime transport.
+> `LlmAgent` always streams from the model, and the transport does not read the function call
+> the API streams (a `function_call` step in `step.start`, its arguments in an
+> `arguments_delta` delta), so a turn in which the model calls a tool ends with
+> `model.empty_response`. When a call does reach the tool loop, the next model call in the run
+> sends the latest user message instead of the function results. Use the direct client's
+> `function_result` for tool calls on the Interactions API.
 
 ### Stateful continuity and the retention fallback
 
@@ -507,18 +513,17 @@ Interactions transport, `None` otherwise), and `Event` surfaces it via the
 `event.interaction_id`.
 
 Continuity is provider-neutral. `LlmRequest` carries an additive
-`previous_response_id: Option<String>` field that the `LlmAgent` populates from
-the most recent event's `interaction_id`. The Interactions transport maps it to
-the request's `previous_interaction_id` and sends **only the current turn's
-contents** (rather than the full transcript). No Gemini-specific glue lives in
-`adk-agent`; the field is unused (a no-op) for generateContent and other
-providers.
+`previous_response_id: Option<String>` field. Within one run, `LlmAgent` sets it on each
+model call after the first from the `interaction_id` of the run's most recent model
+response; the Interactions transport sends it as `previous_interaction_id`, with the
+latest user content as the only input. Each new run (each `Runner::run`) starts without
+one and sends the session's full transcript. No Gemini-specific glue lives in
+`adk-agent`; the field is unused (a no-op) for generateContent and other providers.
 
 ```text
-Turn 1:  request (transcript)        → interaction v1_abc   → event.interaction_id() == "v1_abc"
-Turn 2:  request previous_response_id = "v1_abc"
-         → previous_interaction_id = "v1_abc", sends only the new turn
-         → interaction v1_def        → event.interaction_id() == "v1_def"
+Run 1, model call 1: transcript, no previous_interaction_id   → interaction v1_abc
+Run 1, model call 2: previous_interaction_id = "v1_abc", latest user content only
+Run 2, model call 1: transcript, no previous_interaction_id   → interaction v1_def
 ```
 
 **Retention-window fallback.** Stored interactions expire, and the server answers an
@@ -526,8 +531,8 @@ expired `previous_interaction_id` with `NotFound`.
 
 | Request | Expired `previous_interaction_id` |
 |---------|-----------------------------------|
-| Non-streaming (`StreamingMode::None` in `RunConfig`) | The request is rebuilt with the full transcript and no `previous_interaction_id`, and sent once more; the `NotFound` is not surfaced |
-| Streaming (`StreamingMode::SSE`, the `RunConfig` default) | The `NotFound` error fails the turn |
+| `generate_content(request, false)` | The request is rebuilt with the full transcript and no `previous_interaction_id`, and sent once more; the `NotFound` is not surfaced |
+| `generate_content(request, true)`, which `LlmAgent` uses for every `StreamingMode` | The `NotFound` error fails the call |
 
 ### Re-exported types
 
