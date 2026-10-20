@@ -62,6 +62,9 @@ An agent with tools needs a model whose library page lists tools. Thinking outpu
 adk-rust = { version = "3.0.0", features = ["ollama"] }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
+# For the configuration sample:
+adk-core = "3.0.0"
+adk-model = { version = "3.0.0", features = ["ollama"] }
 # For the tool-calling sample:
 adk-tool = "3.0.0"
 schemars = "1"
@@ -119,8 +122,8 @@ fn build() -> adk_core::Result<OllamaModel> {
 
 A request's `GenerateContentConfig` overrides `temperature`, `top_p`, and `top_k`, and sends
 `stop_sequences`, `seed`, and both penalties in `options`, `top_logprobs` as `logprobs` and
-`top_logprobs` (tokens in `provider_metadata["logprobs"]`), and `response_schema` as
-`format`. `max_output_tokens` is not sent.
+`top_logprobs` (tokens in `provider_metadata["logprobs"]`), `response_schema` as
+`format`, and `max_output_tokens` as `options.num_predict`.
 `OllamaModel::with_timeouts` sets the connect and idle timeouts (30 seconds and 10 minutes by
 default); a model that takes longer than the idle timeout to load needs a longer one. A stall
 fails with `ErrorCategory::Timeout`: `model.ollama.timeout` before the response headers,
@@ -170,7 +173,7 @@ fn build() -> anyhow::Result<LlmAgent> {
 | Behaviour | Rule |
 |-----------|------|
 | Streaming | Tool calls stream as partial responses, so a streamed tool-call turn is saved as one event |
-| Calls without IDs | Ollama sends calls without IDs; the agent assigns each an `adk-call-` ID and leaves it out of the next request |
+| Calls without IDs | Ollama sends calls without IDs; the agent assigns each an `adk-call-` ID. The next request carries the tool result as a `tool` message, but the assistant message that made the call is sent without its `tool_calls` |
 | Calls written as text | Tool-call markup a model writes into its text (the Qwen/Hermes, Llama, Mistral Nemo, DeepSeek, DeepSeek-V3, Gemma 4, and action-tag formats) becomes a call when it names a declared tool, streamed or not |
 | Tool images | Images a tool returns are sent in a user message after the tool messages |
 
