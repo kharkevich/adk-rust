@@ -50,7 +50,7 @@ fn gemini_model() -> anyhow::Result<BoxedModel> {
 |-------------------|-----|
 | `models/gemini-3.1-flash-live-preview` | Conversations with tools and video frames; the catalog default (`GEMINI_LIVE_DEFAULT`) and the examples' default |
 | `models/gemini-3.8-live` | Conversations; camera frames reach it through `realtimeInput.video` |
-| `models/gemini-2.5-flash-native-audio-preview-12-2025` | Native audio, required for [affective dialogue](affective-dialogue.md); the catalog lists it as deprecated |
+| `models/gemini-2.5-flash-native-audio-latest`, `models/gemini-2.5-flash-native-audio-preview-12-2025` | Native audio, required for [affective dialogue](affective-dialogue.md); the catalog lists the dated preview as deprecated |
 | `models/gemini-3.5-live-translate-preview` | Translation; see the [`live_translation` example](examples.md#live_translation) |
 
 - **Transport**: WebSocket (`gemini` feature) to AI Studio, or Vertex AI Live

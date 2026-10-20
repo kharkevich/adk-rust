@@ -28,11 +28,10 @@ sends `enableAffectiveDialog: true` inside `generationConfig`.
 
 | Requirement | Detail |
 |-------------|--------|
-| A Gemini Live native-audio model | On AI Studio, `models/gemini-2.5-flash-native-audio-preview-12-2025` (the catalog lists it as deprecated); only native-audio models honor the setting, and the half-cascade `models/gemini-3.1-flash-live-preview` is not one |
+| A Gemini Live native-audio model | On AI Studio, `models/gemini-2.5-flash-native-audio-latest` or `models/gemini-2.5-flash-native-audio-preview-12-2025` (the catalog lists the dated preview as deprecated). A model without native audio, such as `models/gemini-3.1-flash-live-preview` or `models/gemini-3.8-live`, rejects the setting: the server closes the session with code 1007, `Request contains an invalid argument.` |
 | The `v1alpha` endpoint | `GeminiLiveBackend::studio(...)` connects to it |
 
-On OpenAI the setting is ignored, so it can be set for every provider. Choose the model with
-it:
+On OpenAI the setting is ignored. On Gemini, choose the model with it:
 
 ```rust
 use adk_realtime::gemini::{GeminiLiveBackend, GeminiRealtimeModel};
@@ -41,7 +40,7 @@ use std::sync::Arc;
 
 fn gemini_model(api_key: String, affective: bool) -> BoxedModel {
     let model_id = if affective {
-        "models/gemini-2.5-flash-native-audio-preview-12-2025"
+        "models/gemini-2.5-flash-native-audio-latest"
     } else {
         "models/gemini-3.1-flash-live-preview"
     };
