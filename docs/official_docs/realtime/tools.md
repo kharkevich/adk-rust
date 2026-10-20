@@ -230,12 +230,12 @@ fn build(model: BoxedModel) -> adk_realtime::Result<RealtimeRunner> {
 |-----------|----------------------------|
 | Arguments are not a JSON object | `{"error": "Tool '<name>' was not run: its arguments are not valid JSON (...)"}` — the tool does not run with `{}` |
 | The policy denies the call | `{"error": "Tool '<name>' denied by policy: <reason>"}` |
-| The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
+| The call needs confirmation and no decision exists | `{"error": "Tool '<name>' requires confirmation: <reason>"}`; `RealtimeAgent` also emits an event carrying the `ToolConfirmationRequest`, and the request is recorded in the approval store |
 | The tool runs past its timeout (default five minutes) | `{"error": "Tool '<name>' timed out after ..."}` |
 | An ADK tool fails | `{"error": "tool '<name>' failed: <component>.<category> (<code>)"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
 | A native handler fails | `{"error": "tool '<name>' failed"}` — the message stays out unless `expose_tool_error_messages(true)` is set |
 | The result screen withholds the result | `{"status": "result_withheld", "error": "tool '<name>' ran, but its result was withheld: <reason>; ..."}` |
-| The kill switch is frozen | Nothing — the session ends with a `governance.frozen` error |
+| The kill switch is frozen | Nothing — `RealtimeRunner::run` returns a `RealtimeError::ToolError` whose message carries the kill-switch reason ("execution is frozen by the governance kill switch …") |
 
 An error message can quote credentials, internal hosts, or upstream bodies, and the provider
 can speak it to the user and the session stores it, so by default it reaches neither.
