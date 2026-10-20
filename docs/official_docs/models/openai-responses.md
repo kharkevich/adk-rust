@@ -38,13 +38,16 @@ later through the Responses API.
 [dependencies]
 adk-rust = { version = "3.0.0", features = ["openai"] }
 adk-model = { version = "3.0.0", features = ["openai"] }
+adk-core = "3.0.0"
 adk-tool = "3.0.0"
 anyhow = "1"
 dotenvy = "0.15"
+futures = "0.3"
 schemars = "1"   # tool parameter schemas
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
 ```
 
 Or with `adk-model` directly:
