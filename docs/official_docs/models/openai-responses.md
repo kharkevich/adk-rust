@@ -550,6 +550,7 @@ of the response.
 
 ```toml
 [dependencies]
+adk-core = { version = "3.0.0", features = ["rustls"] }
 adk-model = { version = "3.0.0", features = ["openai-ws"] }
 anyhow = "1"
 async-openai = { version = "0.41", default-features = false, features = ["rustls", "responses"] }
@@ -564,6 +565,8 @@ use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // The WebSocket stack compiles in two rustls crypto providers; select one before connecting.
+    adk_core::ensure_crypto_provider();
     let config = OpenAIResponsesConfig::new(std::env::var("OPENAI_API_KEY")?, "gpt-5.6-terra");
     let transport = WsTransport::connect(&config).await?;
     let request = CreateResponseArgs::default()
