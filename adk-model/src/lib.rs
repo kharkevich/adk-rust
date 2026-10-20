@@ -24,7 +24,8 @@
 //! | [`MockLlm`] | Test double that replays the same responses on every call | always |
 //!
 //! [`catalog`] holds the recommended model per provider and the lifecycle of known model IDs;
-//! [`pricing::PricingCatalog`] prices usage for every provider.
+//! [`pricing::PricingCatalog`] prices usage from the vendor list prices it carries; models it has
+//! no rates for keep `cost: None`.
 //!
 //! ## Quick start
 //!
