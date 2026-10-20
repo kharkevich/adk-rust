@@ -36,6 +36,10 @@ dotenvy = "0.15"
 tokio = { version = "1", features = ["full"] }
 ```
 
+The shorter samples import `adk-core`, `adk-model`, `adk-gemini`, `serde_json`, `futures`, and
+`tracing` directly; add the ones a sample uses. The Bedrock sample needs `adk-model` with the
+`bedrock` feature.
+
 To depend on the clients alone, use `adk-model` with the same feature names:
 
 ```toml
@@ -215,7 +219,7 @@ handles this per request:
 
 | Request | Endpoint |
 |---------|----------|
-| Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`) with the same key, organization, project, base URL, reasoning effort, retry policy, and timeouts; `store: false` |
+| Declares tools, model GPT-5.6 or later, reasoning not `none` | Responses API (`/responses`) with the same key, organization, base URL, reasoning effort, retry policy, and timeouts; `store: false` |
 | No tools | Chat Completions |
 | Model before GPT-5.6, reasoning effort `None` on the client, or `"reasoning_effort": "none"` in the request's `openai` extension | Chat Completions |
 | Client built with `OpenAIClient::compatible` | Chat Completions |
@@ -609,7 +613,7 @@ returns that verification date (`PRICING_EFFECTIVE_DATE`).
 | Anthropic cache writes | The 1-hour share of `cache_creation_input_tokens` bills at the 1-hour rate, the rest at the 5-minute rate |
 | Long context | Gemini Pro models (over 200K), OpenAI GPT-5.4/5.5 (272K and above) and Claude Haiku 5.5 (over 100K) switch the whole request to the long-context rates; GPT-5.6 long-context rates are not applied |
 | Dated aliases | `gpt-4.1-2025-04-14`, `claude-sonnet-4-5-20250929`, `claude-sonnet-4-5@20250929` and `us.anthropic.claude-sonnet-4-5-20250929-v1:0` resolve to the listed model |
-| Billing provider | A vendor's list price applies only to providers that bill it at that price; an OpenAI model name served by another gateway stays unpriced |
+| Billing provider | A vendor's list price applies only to the providers `PriceVendor::billed_by` names for it: the vendor's own API and, for some vendors, Azure, Bedrock, or OpenRouter. The same model name behind any other endpoint, such as an `OpenAICompatible` gateway, stays unpriced |
 | Gemini | `gemini-3.7-flash` requests are reported as `gemini-3.8-flash`; both are priced at the Gemini 3.8 Flash rates, which change on 2027-01-01 |
 | DeepSeek | `deepseek-flash` (and the retired `deepseek-v4-flash` alias) and `deepseek-v4-pro` at peak rates during 01:00–04:00 and 06:00–10:00 UTC on weekdays, half price otherwise; Chinese public holidays bill at peak; `deepseek-chat` and `deepseek-reasoner` are unpriced |
 | Groq | GPT-OSS and Qwen models at Groq's published rates; models Groq prices only on request (Llama, MiniMax) stay unpriced |
@@ -789,8 +793,7 @@ A model can still reject a field its API accepts: GPT-5 models answer `stop` wit
 so stop sequences on OpenAI need a model such as `gpt-4.1-mini`, and current Gemini models
 (`gemini-3.5-flash-lite`, `gemini-3.7-flash`) answer penalties and log probabilities with
 `INVALID_ARGUMENT` ("Penalty is not enabled for this model"), which fails the request with
-`ErrorCategory::InvalidInput`. `top_k` is not covered by this check, and `OllamaModel` does
-not send `max_output_tokens`.
+`ErrorCategory::InvalidInput`. `top_k` is not covered by this check.
 
 ```rust
 use adk_core::GenerateContentConfig;
@@ -834,8 +837,9 @@ state is not written, and no tool from the turn runs.
   `model.openrouter.bad_gateway`, `Unavailable`), else `Internal`.
 - **Undecodable chunks** fail with `model.openai_compat.parse`, `model.azure_openai.parse`,
   `model.groq.invalid_chunk`, or `model.ollama.stream_chunk` (`Internal`). The message names
-  only the decoder's error class and position, never the chunk. A chunk that cannot be decoded
-  after the response finished, such as a cut-off usage trailer, is ignored.
+  only the decoder's error class and position, never the chunk. A last line cut off at the end
+  of a stream that already finished, such as a truncated usage trailer, is ignored; a complete
+  line that cannot be decoded fails the stream even after the finish.
 - **Unknown finish reasons** map to `FinishReason::Other`, not `Stop`, on the Chat Completions,
   Azure OpenAI, Groq, and OpenRouter clients and on `DeepSeekClient` and `AzureAIClient`,
   streamed or not. `OllamaModel` maps the final line's `done_reason`: `stop` to
