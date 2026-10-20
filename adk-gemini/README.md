@@ -266,9 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`thoughtSignature` is serialized both on the part and inside the `FunctionCall` object, because
-Gemini 3 models require it in both places for multi-turn function calling. It is omitted when
-`None`.
+`thoughtSignature` is serialized on the part, next to `functionCall`, and omitted when `None`.
 
 ### Structured JSON output
 
@@ -484,9 +482,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`stream()` returns the step events, and `get_interaction`, `delete_interaction`, and
-`cancel_interaction` manage stored interactions. The stream fails when it ends before
-`interaction.completed` or reports a `failed` or `budget_exceeded` status. The
+`stream()` returns the step events as the server sends them, and `get_interaction`,
+`delete_interaction`, and `cancel_interaction` manage stored interactions. The direct stream does
+not check the outcome: a `failed` or `budget_exceeded` status arrives as an ordinary
+`interaction.completed` event, a stream that ends early simply ends, and the API's closing
+`data: [DONE]` frame is yielded as a deserialization error, so stop reading at
+`interaction.completed`. `adk_model::GeminiModel` with `use_interactions_api(true)` turns those
+outcomes into errors. The
 [`interactions_basic`](examples/interactions_basic.rs) example covers streaming and multi-turn
 continuation, and [`examples/gemini_managed_agents/`](../examples/gemini_managed_agents/) covers
 managed agents and environments.
@@ -529,7 +531,7 @@ uses `https://{location}-aiplatform.googleapis.com`.
 | Backend | Transport | Auth | Used by |
 |---------|-----------|------|---------|
 | `StudioBackend` | REST and SSE | API key | `Gemini::new`, `Gemini::with_model`, and the other AI Studio constructors |
-| `VertexBackend` | gRPC for non-streaming requests, REST SSE for streaming | ADC, service account, WIF, or API key | The `with_google_cloud*` and service-account constructors |
+| `VertexBackend` | REST through the `google-cloud-aiplatform-v1` SDK for non-streaming requests, REST SSE for streaming | ADC, service account, WIF, or API key | The `with_google_cloud*` and service-account constructors |
 
 The `GeminiBackend` trait defines `generate_content`, `generate_content_stream`, and the optional
 operations. `VertexBackend` supports generation, streaming, embeddings, and cached content
