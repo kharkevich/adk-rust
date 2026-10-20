@@ -58,8 +58,8 @@ This is an application-defined mapping over `ServerEvent` — see
 The handler builds an `IntegratedRealtimeRunner`, connects, sends `ready`, then runs two
 concurrent loops — outbound (realtime events → browser) and inbound (browser → session) —
 joined with `tokio::select!`. Besides `adk-realtime` (`openai`, `gemini`, `integration`), it
-uses `axum` (`ws` feature), `base64`, `futures`, `serde`, `serde_json`, `tracing`, and
-`uuid`:
+uses `anyhow`, `axum` (`ws` feature), `base64`, `futures`, `serde` (`derive` feature),
+`serde_json`, `tokio` (`macros` feature), `tracing`, and `uuid` (`v4` feature):
 
 ```rust
 use adk_realtime::config::{RealtimeConfig, VadConfig};
