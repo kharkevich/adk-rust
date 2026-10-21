@@ -223,6 +223,42 @@ async fn every_toolset_tool_is_scope_protected() {
     }
 }
 
+#[test]
+fn every_checkout_tool_declares_the_arguments_it_parses() {
+    // A tool without a schema is declared to take no arguments, so a model calls it with `{}`.
+    let kernel = Arc::new(RecordingKernel::default());
+    let tools = PaymentToolsetBuilder::new(kernel.clone(), kernel.clone()).build().tools();
+    let total = Money::new("USD", 7_500, 2);
+    let line = json!({
+        "lineId": "line-1", "title": "Desk", "quantity": 1,
+        "unitPrice": total, "totalPrice": total
+    });
+    let valid = [
+        (
+            "payments_checkout_create",
+            json!({
+                "merchantId": "desk-co", "merchantName": "Desk Co",
+                "cart": { "lines": [line], "total": total }
+            }),
+        ),
+        ("payments_checkout_update", json!({ "transactionId": "tx-1" })),
+        ("payments_checkout_complete", json!({ "transactionId": "tx-1" })),
+        ("payments_checkout_cancel", json!({ "transactionId": "tx-1", "reason": "changed mind" })),
+    ];
+    for (name, args) in valid {
+        let tool = tools.iter().find(|tool| tool.name() == name).expect(name);
+        let schema =
+            tool.parameters_schema().unwrap_or_else(|| panic!("{name} declares no schema"));
+        let validator = jsonschema::validator_for(&schema).expect("a valid schema");
+        assert!(validator.is_valid(&args), "{name}: {args} must satisfy {schema}");
+        assert!(!validator.is_valid(&json!({})), "{name}: an empty call must not satisfy it");
+    }
+    let create = tools.iter().find(|tool| tool.name() == "payments_checkout_create").unwrap();
+    let cart: Cart = serde_json::from_value(json!({ "lines": [line], "total": total })).unwrap();
+    assert_eq!(cart.total, total, "the schema's cart is the cart the tool parses");
+    assert!(create.parameters_schema().is_some());
+}
+
 #[tokio::test]
 async fn a_scoped_call_reports_the_calling_agent_and_session() {
     let kernel = Arc::new(RecordingKernel::default());

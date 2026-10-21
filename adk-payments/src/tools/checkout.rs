@@ -85,6 +85,53 @@ struct ToolResponse {
     summary: SafeTransactionSummary,
 }
 
+/// The JSON schema of a [`Money`](crate::domain::Money) amount.
+fn money_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "currency": { "type": "string", "description": "ISO 4217 code, such as USD" },
+            "amountMinor": { "type": "integer", "description": "The amount in minor units, such as cents" },
+            "scale": { "type": "integer", "description": "Digits after the decimal point: 2 for USD" }
+        },
+        "required": ["currency", "amountMinor", "scale"]
+    })
+}
+
+/// The JSON schema of a [`Cart`].
+fn cart_schema() -> Value {
+    let line = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "lineId": { "type": "string" },
+            "merchantSku": { "type": "string" },
+            "title": { "type": "string" },
+            "quantity": { "type": "integer", "minimum": 1 },
+            "unitPrice": money_schema(),
+            "totalPrice": money_schema()
+        },
+        "required": ["lineId", "title", "quantity", "unitPrice", "totalPrice"]
+    });
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "cartId": { "type": "string" },
+            "lines": { "type": "array", "items": line },
+            "subtotal": money_schema(),
+            "total": money_schema()
+        },
+        "required": ["lines", "total"]
+    })
+}
+
+/// The JSON schema of a fulfillment selection, which the backend interprets.
+fn fulfillment_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "The fulfillment option the buyer chose, as the merchant's checkout offers it"
+    })
+}
+
 pub(super) fn parse_args<T: serde::de::DeserializeOwned>(
     tool_name: &str,
     args: Value,
@@ -388,6 +435,20 @@ impl Tool for CreateCheckoutTool {
         "Create a new merchant-backed checkout session. Returns a masked transaction summary."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "merchantId": { "type": "string" },
+                "merchantName": { "type": "string" },
+                "cart": cart_schema(),
+                "fulfillment": fulfillment_schema(),
+                "mode": { "type": "string", "enum": ["human_present", "human_not_present"] }
+            },
+            "required": ["merchantId", "merchantName", "cart"]
+        }))
+    }
+
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_CREATE_SCOPES
     }
@@ -458,6 +519,18 @@ impl Tool for UpdateCheckoutTool {
         "Update cart or fulfillment details on an existing checkout session."
     }
 
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "cart": cart_schema(),
+                "fulfillment": fulfillment_schema()
+            },
+            "required": ["transactionId"]
+        }))
+    }
+
     fn required_scopes(&self) -> &[&str] {
         CHECKOUT_UPDATE_SCOPES
     }
@@ -493,6 +566,25 @@ impl Tool for CompleteCheckoutTool {
 
     fn description(&self) -> &str {
         "Finalize a checkout session and produce an order. The continuation identifier is returned explicitly for follow-up."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "selectedPaymentMethod": {
+                    "type": "object",
+                    "properties": {
+                        "selectionKind": { "type": "string" },
+                        "reference": { "type": "string" },
+                        "displayHint": { "type": "string" }
+                    },
+                    "required": ["selectionKind"]
+                }
+            },
+            "required": ["transactionId"]
+        }))
     }
 
     fn required_scopes(&self) -> &[&str] {
@@ -549,6 +641,17 @@ impl Tool for CancelCheckoutTool {
 
     fn description(&self) -> &str {
         "Cancel an active checkout session or transaction."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "transactionId": { "type": "string" },
+                "reason": { "type": "string" }
+            },
+            "required": ["transactionId"]
+        }))
     }
 
     fn required_scopes(&self) -> &[&str] {
