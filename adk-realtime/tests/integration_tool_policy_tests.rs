@@ -403,9 +403,12 @@ async fn the_run_policy_governs_integrated_tool_calls() {
     assert!(message.contains("denied by policy"), "{message}");
 }
 
+/// Whether each call was authenticated, and the scopes it reported.
+type SeenIdentities = Arc<std::sync::Mutex<Vec<(bool, Vec<String>)>>>;
+
 /// Records what each call's context says about its user.
 struct IdentityProbe {
-    seen: Arc<std::sync::Mutex<Vec<(bool, Vec<String>)>>>,
+    seen: SeenIdentities,
 }
 
 #[async_trait]
