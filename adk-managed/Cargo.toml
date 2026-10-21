@@ -60,3 +60,4 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "test
 proptest = "1.5"
 # Path-only, so the publish order is not constrained by a dev-dependency.
 adk-session = { path = "../adk-session", features = ["sqlite", "postgres"] }
+sqlx = { workspace = true, features = ["sqlite"] }

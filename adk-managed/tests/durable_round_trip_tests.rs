@@ -180,6 +180,7 @@ impl Backend for Shared {
 /// SQLite files, reopened by each instance.
 struct Sqlite {
     dir: std::path::PathBuf,
+    wal: bool,
 }
 
 impl Sqlite {
@@ -190,7 +191,7 @@ impl Sqlite {
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        Self { dir }
+        Self { dir, wal: false }
     }
 
     fn url(&self, file: &str) -> String {
@@ -207,6 +208,12 @@ impl Drop for Sqlite {
 #[async_trait]
 impl Backend for Sqlite {
     async fn open(&self) -> (Arc<dyn SessionService>, ManagedStores) {
+        if self.wal {
+            for file in ["sessions.db", "state.db", "runs.db", "approvals.db"] {
+                let s = adk_session::SqliteSessionService::new(&self.url(file)).await.unwrap();
+                sqlx::query("PRAGMA journal_mode=WAL").execute(s.pool()).await.unwrap();
+            }
+        }
         let sessions =
             adk_session::SqliteSessionService::new(&self.url("sessions.db")).await.unwrap();
         sessions.migrate().await.unwrap();
@@ -533,13 +540,34 @@ async fn a_result_sent_to_another_replica_wakes_the_run(backend: &dyn Backend) {
         call("deploy", "call_deploy", json!({ "target": "prod" })),
         say("Deployed via the other replica."),
     ]);
+    let t0 = std::time::Instant::now();
     let replica_a = runtime(backend, &llm, fast().with_worker_id("replica-a")).await;
     let replica_b = runtime(backend, &llm, fast().with_worker_id("replica-b")).await;
+    eprintln!("DIAG runtimes open: {:?}", t0.elapsed());
     let (session, mut stream) = start(&replica_a, deploy_agent()).await;
+    eprintln!("DIAG session started: {:?}", t0.elapsed());
     replica_a.send_event(&session, text("Deploy to prod")).await.unwrap();
-    turn(&mut stream).await;
+    let (kinds, stop) = turn(&mut stream).await;
+    eprintln!("DIAG first turn idle {kinds:?} {stop:?}: {:?}", t0.elapsed());
+    {
+        let (_, stores) = backend.open().await;
+        let state = stores.state.load(&session.0).await;
+        let run = match &state {
+            Ok(Some(state)) => match &state.durable_run_id {
+                Some(run_id) => stores
+                    .runs
+                    .get(run_id)
+                    .await
+                    .map(|r| r.map(|r| (r.state, r.lease_owner, r.not_before, r.wake_pending))),
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        };
+        eprintln!("DIAG after park: run {run:?}: {:?}", t0.elapsed());
+    }
 
     replica_b.send_event(&session, deploy_result()).await.unwrap();
+    eprintln!("DIAG result sent to b: {:?}", t0.elapsed());
     let (sessions, stores) = backend.open().await;
     let mut resumed = false;
     for _ in 0..400 {
@@ -549,6 +577,7 @@ async fn a_result_sent_to_another_replica_wakes_the_run(backend: &dyn Backend) {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+    eprintln!("DIAG resumed={resumed} calls={}: {:?}", llm.calls(), t0.elapsed());
     if !resumed {
         // What the stores hold tells which step stalled: the park, the wake, or the claim.
         let state = stores.state.load(&session.0).await;
@@ -606,6 +635,14 @@ async fn a_result_sent_to_another_replica_wakes_the_run_in_memory() {
 #[tokio::test]
 async fn a_result_sent_to_another_replica_wakes_the_run_on_sqlite() {
     a_result_sent_to_another_replica_wakes_the_run(&Sqlite::new("replica")).await;
+}
+
+#[tokio::test]
+#[ignore = "diagnostic"]
+async fn diag_replica_wake_on_sqlite_wal() {
+    let mut backend = Sqlite::new("replica-wal");
+    backend.wal = true;
+    a_result_sent_to_another_replica_wakes_the_run(&backend).await;
 }
 
 #[tokio::test]
