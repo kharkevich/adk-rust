@@ -760,8 +760,8 @@ macro_rules! sql_run_store {
     };
 }
 
-#[cfg(feature = "sqlite")]
 /// Adds `authenticated` (spec 3.1 §9.2 I6); rows written before it read as unauthenticated.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 const ADD_AUTHENTICATED: &str =
     "ALTER TABLE adk_runs ADD COLUMN authenticated BOOLEAN NOT NULL DEFAULT FALSE";
 
