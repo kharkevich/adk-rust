@@ -15,7 +15,7 @@ any `LlmAgent` (the [`CodingAgent`](harness.md) harness wires it for you).
 
 | Tool | Params | Behavior |
 |------|--------|----------|
-| `read_file` | `path`, `offset?`, `limit?` | Return file contents, line-numbered |
+| `read_file` | `path`, `offset?`, `limit?` | Return file contents, line-numbered; a PNG, JPEG, GIF, WebP or PDF as inline data (see [Images and PDFs](#images-and-pdfs)) |
 | `write_file` | `path`, `content` | Create/overwrite a file (creates parent dirs) |
 | `edit_file` | `path`, `old_string`, `new_string`, `replace_all?` | Exact-string replacement |
 | `glob` | `pattern`, `path?` | List files matching a glob (e.g. `src/**/*.rs`) |
@@ -237,3 +237,20 @@ secret redaction) and [`adk-auth`](../security/access-control.md) for tokened
 tools (e.g. GitHub).
 
 Next: [The harness →](harness.md)
+
+## Images and PDFs
+
+`read_file` returns a file whose bytes start like a PNG, JPEG, GIF, WebP or PDF as inline
+data (spec 3.1 §10 D6): the result is `{ "response": { path, mime_type, bytes, content,
+inline }, "inline_data": [{ mime_type, data }] }`, which the agent loop turns into a function
+response with an inline part. Providers with vision receive the picture or document;
+`content` is a text stub naming the type and size, so a provider that drops binary parts
+still learns what the file is.
+
+| Rule | Mechanism |
+|---|---|
+| The type comes from the bytes | `sniff_inline_mime` reads the magic bytes; a text file named `diagram.png` is read as text and `notes.txt` holding a PNG is returned as an image |
+| Same confinement as text | The bytes are read through the no-follow open and hard-link refusal of the section above, and excluded files stay refused |
+| Capped | `ReadFileTool::max_inline_bytes` (default `DEFAULT_MAX_INLINE_BYTES`, 4 MiB; at most `adk_core::MAX_INLINE_DATA_SIZE`): a larger file gets the stub without bytes |
+| Text-only models | `ReadFileTool::text_only` returns the stub and never the bytes |
+| Nothing else | Other binary content is refused, as before; the bytes are never interpreted by the tool |

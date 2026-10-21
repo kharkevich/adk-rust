@@ -9,7 +9,7 @@ to work on a codebase, scoped to a sandboxed workspace.
 
 | Tool | Purpose |
 |------|---------|
-| `read_file` | Read a text file with line numbers (optional offset/limit). Refuses excluded secret files. |
+| `read_file` | Read a text file with line numbers (optional offset/limit), or a PNG, JPEG, GIF, WebP or PDF as inline data the model can look at (sniffed from the bytes, capped at 4 MiB, with a text stub naming the type and size). Refuses excluded secret files. |
 | `write_file` | Create or overwrite a file (creates parent dirs). |
 | `edit_file` | Exact-string replacement; requires a prior `read_file` by the same session and agent. |
 | `glob` | List files matching a pattern (e.g. `src/**/*.rs`). Skips excluded secret files. |

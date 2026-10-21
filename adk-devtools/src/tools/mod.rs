@@ -11,5 +11,5 @@ pub use bash::BashTool;
 pub use edit::EditFileTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
-pub use read::ReadFileTool;
+pub use read::{DEFAULT_MAX_INLINE_BYTES, ReadFileTool, sniff_inline_mime};
 pub use write::WriteFileTool;

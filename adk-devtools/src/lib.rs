@@ -55,6 +55,9 @@ pub mod tools;
 
 pub use error::DevToolError;
 pub use launcher::{CommandLauncher, HostLauncher};
-pub use tools::{BashTool, EditFileTool, GlobTool, GrepTool, ReadFileTool, WriteFileTool};
+pub use tools::{
+    BashTool, DEFAULT_MAX_INLINE_BYTES, EditFileTool, GlobTool, GrepTool, ReadFileTool,
+    WriteFileTool, sniff_inline_mime,
+};
 pub use toolset::DevToolset;
 pub use workspace::{DEFAULT_ENV_ALLOWLIST, DEFAULT_EXCLUDE_GLOBS, Workspace};

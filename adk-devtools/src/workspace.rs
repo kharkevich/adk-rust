@@ -414,6 +414,25 @@ impl Workspace {
     /// outside the workspace (spec 3.1 §10 D4, §9.2 I28). Windows reads the path as
     /// checked, without either guarantee.
     pub(crate) async fn read_contained(&self, target: &Path) -> Result<String, DevToolError> {
+        let bytes = self.read_contained_bytes(target).await?;
+        String::from_utf8(bytes).map_err(|_| {
+            self.open_error(
+                target,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "stream did not contain valid UTF-8",
+                ),
+            )
+        })
+    }
+
+    /// Reads the bytes of the file at `target` under the rules of
+    /// [`read_contained`](Self::read_contained): the same no-follow open and hard-link
+    /// refusal, for content that is not text (spec 3.1 §10 D6, §9.2 I55).
+    pub(crate) async fn read_contained_bytes(
+        &self,
+        target: &Path,
+    ) -> Result<Vec<u8>, DevToolError> {
         #[cfg(unix)]
         {
             use std::io::Read as _;
@@ -422,7 +441,7 @@ impl Workspace {
             let relative = self.beneath_root(target)?;
             let root = self.root.clone();
             let read =
-                tokio::task::spawn_blocking(move || -> std::io::Result<Result<String, u64>> {
+                tokio::task::spawn_blocking(move || -> std::io::Result<Result<Vec<u8>, u64>> {
                     let dir = crate::beneath::open_root(&root)?;
                     let opened = crate::beneath::open_beneath(&dir, &relative, libc::O_RDONLY, 0)?;
                     let mut file = std::fs::File::from(opened);
@@ -430,8 +449,8 @@ impl Workspace {
                     if meta.is_file() && meta.nlink() > 1 {
                         return Ok(Err(meta.nlink()));
                     }
-                    let mut contents = String::new();
-                    file.read_to_string(&mut contents)?;
+                    let mut contents = Vec::new();
+                    file.read_to_end(&mut contents)?;
                     Ok(Ok(contents))
                 })
                 .await
@@ -450,7 +469,7 @@ impl Workspace {
         }
         #[cfg(not(unix))]
         {
-            Ok(tokio::fs::read_to_string(target).await?)
+            Ok(tokio::fs::read(target).await?)
         }
     }
 
