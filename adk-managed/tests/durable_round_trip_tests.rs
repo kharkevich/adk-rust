@@ -550,8 +550,30 @@ async fn a_result_sent_to_another_replica_wakes_the_run(backend: &dyn Backend) {
     turn(&mut stream).await;
 
     replica_b.send_event(&session, deploy_result()).await.unwrap();
-    wait_for("the resumed turn", || llm.calls() == 2).await;
     let (sessions, stores) = backend.open().await;
+    let mut resumed = false;
+    for _ in 0..400 {
+        if llm.calls() == 2 {
+            resumed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    if !resumed {
+        // What the stores hold tells which step stalled: the park, the wake, or the claim.
+        let state = stores.state.load(&session.0).await;
+        let run = match &state {
+            Ok(Some(state)) => match &state.durable_run_id {
+                Some(run_id) => stores.runs.get(run_id).await,
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        };
+        panic!(
+            "timed out waiting for the resumed turn: {} model calls; state {state:?}; run {run:?}",
+            llm.calls()
+        );
+    }
     let identity = adk_session::GetRequest {
         app_name: "ops-console".into(),
         user_id: "user-7".into(),
