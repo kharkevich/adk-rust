@@ -16,7 +16,7 @@ use adk_core::schedule::{MissedFirePolicy, Schedule, ScheduleSpec};
 use adk_core::{
     ActingContext, AgentId, AgentPrincipal, Content, DurableRunStore, InMemoryRunStore,
     InMemoryScheduleStore, Llm, LlmRequest, LlmResponse, LlmResponseStream, NewRun,
-    PRINCIPAL_NOT_ALLOWED_CODE, Part, PolicyDecision, ReadonlyContext, Result, RunRecord, RunState,
+    PRINCIPAL_NOT_ALLOWED_CODE, Part, PolicyDecision, Result, RunRecord, RunState,
     SUBJECT_MISMATCH_CODE, ScheduleStore, StaticSubjectDelegation, SubjectRef, Tool, ToolContext,
     ToolPolicy, ToolPolicyRequest,
 };

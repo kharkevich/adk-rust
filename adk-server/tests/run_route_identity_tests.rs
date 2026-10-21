@@ -11,8 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_core::{
-    Agent, EventStream, InvocationContext, ReadonlyContext, RequestContext, Result as AdkResult,
-    SingleAgentLoader,
+    Agent, EventStream, InvocationContext, RequestContext, Result as AdkResult, SingleAgentLoader,
 };
 use adk_server::auth_bridge::{RequestContextError, RequestContextExtractor};
 use adk_server::{ServerBuilder, ServerConfig};
