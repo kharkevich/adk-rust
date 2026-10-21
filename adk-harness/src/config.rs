@@ -74,6 +74,11 @@ struct ConfigFile {
     mode: Option<String>,
     sandbox: Option<bool>,
     fail_if_unavailable: Option<bool>,
+    /// `[[hooks]]` tables are read by `hooks::HookSet::load_workspace` (spec 3.1 §7.22),
+    /// so they are neither applied here nor reported as unknown.
+    #[serde(default)]
+    #[allow(dead_code)]
+    hooks: Vec<toml::Value>,
     #[serde(flatten)]
     other: BTreeMap<String, toml::Value>,
 }

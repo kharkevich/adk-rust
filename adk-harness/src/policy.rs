@@ -862,6 +862,8 @@ pub(crate) struct PolicyInner {
     pub(crate) prompts: PromptContexts,
     /// Provider-executed web tools the operator enabled (spec 3.1 §7.20, I49).
     pub(crate) provider_web_tools: BTreeSet<String>,
+    #[cfg(feature = "hooks")]
+    pub(crate) hooks: Option<Arc<crate::hooks::HookRunner>>,
     #[cfg(feature = "auth")]
     pub(crate) identity: Arc<crate::identity::IdentityGate>,
     #[cfg(feature = "observe")]
@@ -1222,6 +1224,33 @@ impl HarnessPolicy {
         }
         if base == TableDecision::Deny {
             return deny(PolicyDecision::deny(reason), mode);
+        }
+        // 4a: the PreTool hooks may add a Deny and nothing else (spec 3.1 §7.22, §9.2 I53).
+        // Only the governed evaluation runs them; the handler's re-check does not.
+        #[cfg(feature = "hooks")]
+        if governed && let Some(hooks) = &self.inner.hooks {
+            let scope = crate::hooks::HookScope::from_request(request, call_id);
+            let class = crate::hooks::class_label(&kind);
+            let verdict = hooks
+                .pre_tool(
+                    &crate::hooks::HookCall {
+                        tool: &request.tool_name,
+                        args: &request.args,
+                        class: &class,
+                        acting: request.acting.as_ref(),
+                        function_call_id: call_id,
+                    },
+                    mode,
+                    &scope,
+                    self.audit_for(request).as_ref(),
+                )
+                .await;
+            if let crate::hooks::PreToolVerdict::Deny { reason: hook_reason } = verdict {
+                return deny(
+                    PolicyDecision::deny(format!("denied by a hook: {hook_reason}")),
+                    mode,
+                );
+            }
         }
 
         let mut matched_rules = Vec::new();

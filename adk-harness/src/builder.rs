@@ -173,6 +173,10 @@ pub struct HarnessAgentBuilder {
     mcp_interaction: crate::mcp::McpInteractionConfig,
     #[cfg(feature = "mcp")]
     mcp_servers: Vec<crate::mcp::McpServerSet>,
+    #[cfg(feature = "hooks")]
+    hooks: Option<crate::hooks::HookSet>,
+    #[cfg(feature = "hooks")]
+    hooks_enabled: bool,
 }
 
 impl HarnessAgentBuilder {
@@ -245,6 +249,10 @@ impl HarnessAgentBuilder {
             mcp_interaction: crate::mcp::McpInteractionConfig::default(),
             #[cfg(feature = "mcp")]
             mcp_servers: Vec::new(),
+            #[cfg(feature = "hooks")]
+            hooks: None,
+            #[cfg(feature = "hooks")]
+            hooks_enabled: true,
         }
     }
 
@@ -802,6 +810,34 @@ impl HarnessAgentBuilder {
         self
     }
 
+    /// The hooks the operator and the user configured (spec 3.1 §7.22). The workspace's
+    /// `.adk/harness.toml` hooks are added at build, after these, and run only under the
+    /// workspace's content-keyed trust. Hooks observe tool events through the shell's
+    /// launcher; they can deny, fail or annotate and never allow (spec 3.1 §9.2 I53).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use adk_harness::hooks::{HookEvent, HookSet, HookSpec};
+    ///
+    /// let hooks = HookSet::new()
+    ///     .with(HookSpec::new(HookEvent::PostEdit, "cargo fmt").matching("write_*"));
+    /// let harness = HarnessAgent::builder("harness").model(model).workspace(ws).hooks(hooks).build()?;
+    /// ```
+    #[cfg(feature = "hooks")]
+    pub fn hooks(mut self, hooks: crate::hooks::HookSet) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    /// Runs no hooks, not even the workspace's (`--no-hooks`, spec 3.1 §8.1).
+    #[cfg(feature = "hooks")]
+    pub fn without_hooks(mut self) -> Self {
+        self.hooks_enabled = false;
+        self.hooks = None;
+        self
+    }
+
     pub(crate) fn with_last_todos(mut self, last: Arc<Mutex<TodoList>>) -> Self {
         self.last_todos = Some(last);
         self
@@ -874,6 +910,17 @@ impl HarnessAgentBuilder {
                 .unwrap_or_else(|| Arc::new(InMemoryWorkspaceTrustStore::new())),
             require_trust: self.instructions.require_trust,
         });
+        // Hooks (spec 3.1 §7.22): operator and user hooks, then the workspace's, through the
+        // shell's launcher and under the workspace's content-keyed trust.
+        #[cfg(feature = "hooks")]
+        let hook_runner = build_hook_runner(
+            self.hooks_enabled,
+            self.hooks,
+            &workspace,
+            &shell,
+            &status,
+            &instruction_state,
+        )?;
         #[cfg_attr(not(feature = "team"), allow(unused_mut))]
         let mut registry = ToolClassRegistry::harness_defaults(&self.name).with_web_allowlist(
             self.web.as_ref().map(|web| web.allowed_domains.clone()).unwrap_or_default(),
@@ -1032,6 +1079,20 @@ impl HarnessAgentBuilder {
                 Arc::new(crate::identity::IdentityGate::new(self.identity.require_authenticated)),
             )
         };
+        // Every tool, the members' included, runs the PostTool and PostEdit hooks after it
+        // executes (spec 3.1 §7.22); the wrapper forwards the declaration, so origins hold.
+        #[cfg(feature = "hooks")]
+        let tools = match &hook_runner {
+            Some(runner) => crate::hooks::HookedTool::wrap_all(
+                tools,
+                runner,
+                &registry,
+                &self.name,
+                status.isolation(),
+                (mode_store.clone(), self.mode),
+            ),
+            None => tools,
+        };
         #[cfg(feature = "team")]
         let member_tools = tools.clone();
         // Members get the same request observers as the coordinator (spec 3.1 §7.10, §7.13).
@@ -1103,6 +1164,8 @@ impl HarnessAgentBuilder {
             trust_mcp_read_only_hints: self.trust_mcp_read_only_hints,
             prompts: PromptContexts::default(),
             provider_web_tools: provider_web_names,
+            #[cfg(feature = "hooks")]
+            hooks: hook_runner.clone(),
             #[cfg(feature = "auth")]
             identity: identity_gate.clone(),
             #[cfg(feature = "observe")]
@@ -1152,12 +1215,28 @@ impl HarnessAgentBuilder {
         });
         #[cfg(feature = "memory")]
         let provider_memory = memory_resolver.clone();
+        #[cfg(feature = "hooks")]
+        let provider_hooks = hook_runner.clone();
         let provider: InstructionProvider = Box::new(move |ctx: Arc<dyn ReadonlyContext>| {
             let parts = parts.clone();
+            #[cfg(feature = "hooks")]
+            let hooks = provider_hooks.clone();
             #[cfg(feature = "memory")]
             let memory = provider_memory.clone();
             Box::pin(async move {
                 let instruction = parts.assemble();
+                // The session's OnSessionStart notes join the <environment> block; they are
+                // cached per session, so the prefix stays stable within a run (I56).
+                #[cfg(feature = "hooks")]
+                let instruction = match &hooks {
+                    Some(hooks) => hooks.with_session_notes(
+                        instruction,
+                        ctx.app_name(),
+                        ctx.user_id(),
+                        ctx.session_id(),
+                    ),
+                    None => instruction,
+                };
                 #[cfg(feature = "memory")]
                 let instruction = match memory {
                     Some(memory) => memory.append_index(instruction, ctx.as_ref()).await,
@@ -1352,6 +1431,8 @@ impl HarnessAgentBuilder {
                 provider_web,
                 #[cfg(feature = "mcp")]
                 mcp,
+                #[cfg(feature = "hooks")]
+                hooks: hook_runner,
             },
             info,
         })
@@ -1399,6 +1480,43 @@ impl PromptParts {
         out.push_str(&self.state.instructions.render(self.state.trusted()));
         out.trim_end().to_string()
     }
+}
+
+/// The hook runner of a build (spec 3.1 §7.22), or `None` when hooks are off or none are
+/// configured. Workspace hooks come from `.adk/harness.toml` and run only while the
+/// workspace's instruction files, the hooks file included, are trusted (I54).
+#[cfg(feature = "hooks")]
+fn build_hook_runner(
+    enabled: bool,
+    configured: Option<crate::hooks::HookSet>,
+    workspace: &Workspace,
+    shell: &crate::shell::ShellRuntime,
+    status: &IsolationStatus,
+    instructions: &Arc<InstructionState>,
+) -> Result<Option<Arc<crate::hooks::HookRunner>>> {
+    if !enabled {
+        return Ok(None);
+    }
+    let mut set = configured.unwrap_or_default();
+    if let Some(workspace_hooks) = crate::hooks::HookSet::load_workspace(workspace.root())? {
+        set = set.merge(workspace_hooks);
+    }
+    set.validate()?;
+    if set.is_empty() {
+        return Ok(None);
+    }
+    #[cfg_attr(not(feature = "sandbox"), allow(unused_mut))]
+    let mut runner = crate::hooks::HookRunner::new(set, workspace.clone(), status.clone());
+    #[cfg(feature = "sandbox")]
+    if let Some(launcher) = &shell.launcher {
+        runner = runner
+            .with_launcher(Arc::new(launcher.clone()))
+            .with_read_only_launcher(Arc::new(launcher.read_only()));
+    }
+    #[cfg(not(feature = "sandbox"))]
+    let _ = shell;
+    let state = instructions.clone();
+    Ok(Some(Arc::new(runner.with_workspace_trust(move || state.trusted()))))
 }
 
 /// The long-term memory configuration of a builder (spec 3.1 §7.15.2).

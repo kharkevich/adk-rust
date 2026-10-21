@@ -46,6 +46,8 @@ memory = ["dep:adk-memory", "adk-memory/embedding-trait", "dep:adk-guardrail", "
 memory-embeddings = ["memory", "dep:adk-rag", "adk-rag/openai", "adk-rag/gemini"]
 # Graph memory tools from adk-memory.
 memory-graph = ["memory", "dep:adk-memory"]
+# Hooks on tool events from `.adk/harness.toml`, the user config and the builder (spec 3.1 §7.22).
+hooks = []
 # SQLite backends for the mode, standing-rule and shell-ledger stores.
 sqlite = ["dep:sqlx", "sqlx/sqlite", "adk-graph?/sqlite"]
 # Packs (spec 3.1 §7.16–§7.18).
@@ -95,12 +97,17 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio"] }
-tokio = { workspace = true, features = ["sync", "time", "fs", "rt", "macros"] }
-# `.adk/harness.toml` (spec 3.1 §8.3).
+tokio = { workspace = true, features = ["sync", "time", "fs", "rt", "macros", "process", "io-util"] }
+# `.adk/harness.toml` (spec 3.1 §8.3, §7.22).
 toml.workspace = true
 tracing.workspace = true
 unicode-normalization = "0.1"
 uuid.workspace = true
+
+# The hook runner starts each hook in its own session and kills its process group, as the
+# devtools bash does.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 adk-model = { path = "../adk-model", default-features = false }

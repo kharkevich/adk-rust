@@ -199,6 +199,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures",
+ "libc",
  "regex",
  "serde",
  "serde_json",

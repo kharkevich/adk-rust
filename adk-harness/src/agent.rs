@@ -130,6 +130,8 @@ pub struct HarnessRuntime {
     /// MCP servers and the bridges answering them (spec 3.1 §7.21).
     #[cfg(feature = "mcp")]
     pub(crate) mcp: Option<Arc<crate::mcp::McpInteractionRuntime>>,
+    #[cfg(feature = "hooks")]
+    pub(crate) hooks: Option<Arc<crate::hooks::HookRunner>>,
 }
 
 /// The harness's audit trail, in Block mode: `recorder`, or with feature `auth` an
@@ -301,6 +303,12 @@ impl HarnessRuntime {
     #[cfg(feature = "graph")]
     pub fn plan_graph(&self) -> Option<&Arc<crate::plan_graph::PlanGraphs>> {
         self.plan_graph.as_ref()
+    }
+
+    /// The hooks the harness runs, when any are configured (spec 3.1 §7.22).
+    #[cfg(feature = "hooks")]
+    pub fn hooks(&self) -> Option<&crate::hooks::HookSet> {
+        self.hooks.as_deref().map(crate::hooks::HookRunner::set)
     }
 }
 
@@ -778,6 +786,21 @@ impl HarnessAgent {
                 )
                 .await?;
         }
+        // OnSessionStart hooks run once per session; their notes join the <environment> block
+        // of every run of the session (spec 3.1 §7.22).
+        #[cfg(feature = "hooks")]
+        if let Some(hooks) = &self.runtime.hooks {
+            let mode = self
+                .runtime
+                .policy
+                .mode_for(ctx.app_name(), ctx.user_id(), ctx.session_id(), ctx.invocation_id())
+                .await;
+            let scope = crate::hooks::HookScope::from_invocation(ctx.as_ref());
+            let audit = config.audit.clone().map(|trail| {
+                HarnessAudit::new(trail, AuditActor::for_context(ctx.as_ref()), ctx.session_id())
+            });
+            hooks.on_session_start(mode, &scope, audit.as_ref()).await;
+        }
         // The coordinator authors the held calls; with members the root is the team, not it.
         let held = ctx.session().held_tool_calls(self.name(), ctx.branch());
         self.runtime.ledgers.note_resumable(
@@ -812,7 +835,21 @@ impl HarnessAgent {
             )
         };
         #[cfg(not(feature = "observe"))]
-        let events = self.turn(ctx).await?;
+        let events = self.turn(ctx.clone()).await?;
+        // OnHold and OnStop hooks observe the turn; their notes reach the user as events
+        // without content, never the model (spec 3.1 §7.22).
+        #[cfg(feature = "hooks")]
+        let events = match &self.runtime.hooks {
+            Some(hooks) => {
+                let mode = self
+                    .runtime
+                    .policy
+                    .mode_for(ctx.app_name(), ctx.user_id(), ctx.session_id(), ctx.invocation_id())
+                    .await;
+                hooks.observe(events, ctx.clone(), mode, self.name().to_string())
+            }
+            None => events,
+        };
         Ok(events)
     }
 }

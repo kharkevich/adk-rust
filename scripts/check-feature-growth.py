@@ -69,6 +69,13 @@ ALIASES: dict[str, tuple[str, str, str]] = {
     "distil-whisper": ("collapse", "checkpoint, not a build", "audio-onnx"),
     "moonshine": ("collapse", "checkpoint, not a build", "audio-onnx"),
     "chatterbox": ("collapse", "checkpoint, not a build", "audio-onnx"),
+    # --- Harness add-ons that compile a module, not a dependency. ------------
+    "harness": ("canonical", "links adk-harness, which every harness add-on builds on", "harness"),
+    "harness-hooks": (
+        "keep",
+        "compiles the hooks module of adk-harness (spec 3.1 §7.22): hooks from .adk/harness.toml run on tool events; toml is already a plain dependency",
+        "",
+    ),
     # --- Action node kinds adding nothing over `action`. ---------------------
     "action": ("canonical", "the action node family", "action"),
     "action-code": ("collapse", "no dependency beyond `action`", "action"),

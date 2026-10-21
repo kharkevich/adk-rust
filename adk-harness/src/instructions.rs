@@ -136,6 +136,7 @@ pub struct ProjectInstructions {
     root_digest: String,
     user: Option<InstructionFile>,
     project: Vec<InstructionFile>,
+    config: Option<InstructionFile>,
     nested: Vec<String>,
     git_branch: Option<String>,
 }
@@ -319,13 +320,31 @@ impl ProjectInstructions {
             }
         }
 
+        // `.adk/harness.toml` carries hooks (spec 3.1 §7.22), so it joins the digest a trust
+        // decision covers (spec 3.1 §9.2 I54); it is never rendered as instruction text.
+        let config_path = root.join(".adk").join("harness.toml");
+        let config_file = match std::fs::read(&config_path) {
+            Ok(bytes) if config_path.is_file() => Some(InstructionFile {
+                logical_path: ".adk/harness.toml".to_string(),
+                sha256: crate::fsutil::hex_digest(&bytes),
+                bytes: bytes.len() as u64,
+                scope: InstructionScope::Project,
+                truncated: false,
+                readable: true,
+                content: String::new(),
+            }),
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(io_error(&config_path, &error)),
+        };
+
         let mut nested = Vec::new();
         if config.nested_index {
             let mut names = config.project_files.clone();
             names.extend(FALLBACK_INSTRUCTION_FILES.iter().map(|n| (*n).to_string()));
             collect_nested(&root, &root, 0, &names, &mut nested);
         }
-        Ok(Self { root, root_digest, user, project, nested, git_branch })
+        Ok(Self { root, root_digest, user, project, config: config_file, nested, git_branch })
     }
 
     /// The canonical workspace root.
@@ -360,7 +379,16 @@ impl ProjectInstructions {
         for file in &self.project {
             listing.push_str(&format!("{}\u{1f}{}\n", file.logical_path, file.sha256));
         }
+        if let Some(config) = &self.config {
+            listing.push_str(&format!("{}\u{1f}{}\n", config.logical_path, config.sha256));
+        }
         crate::fsutil::sha256_hex(&listing)
+    }
+
+    /// The workspace's `.adk/harness.toml`, when it has one: its hooks run only under the
+    /// trust decision this file's digest is part of (spec 3.1 §7.22, §9.2 I54).
+    pub fn config_file(&self) -> Option<&InstructionFile> {
+        self.config.as_ref()
     }
 
     /// The branch `.git/HEAD` names.
@@ -391,6 +419,9 @@ impl ProjectInstructions {
         }
         for file in &self.project {
             files.push(json!({ "logicalPath": file.logical_path, "sha256": file.sha256, "bytes": file.bytes, "scope": file.scope, "trusted": trusted }));
+        }
+        if let Some(config) = &self.config {
+            files.push(json!({ "logicalPath": config.logical_path, "sha256": config.sha256, "bytes": config.bytes, "scope": config.scope, "kind": "config", "trusted": trusted }));
         }
         Value::Array(files)
     }

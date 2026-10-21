@@ -31,6 +31,7 @@ use anyhow::{Result, bail};
 use futures::StreamExt;
 use serde_json::{Value, json};
 
+mod hooks;
 mod team_graph;
 mod web_mcp;
 
@@ -975,7 +976,10 @@ async fn run_scripted(name: &str, subject: Subject) -> Result<Checks> {
             Some(result) => result,
             None => match web_mcp::run_scripted(other, subject).await {
                 Some(result) => result,
-                None => bail!("unknown scenario {other}"),
+                None => match hooks::run_scripted(other, subject).await {
+                    Some(result) => result,
+                    None => bail!("unknown scenario {other}"),
+                },
             },
         },
     }
@@ -1014,7 +1018,7 @@ async fn main() -> Result<()> {
                 println!("| — | {provider} | — | skipped: no key |");
                 continue;
             };
-            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).copied() {
+            for scenario in ["live_plan_mode_writes_nothing", "live_standing_rule"].iter().chain(team_graph::LIVE).chain(web_mcp::LIVE).chain(hooks::LIVE).copied() {
                 if !selected.is_empty() && !selected.contains(&scenario) {
                     continue;
                 }
@@ -1024,7 +1028,10 @@ async fn main() -> Result<()> {
                     "live_standing_rule" => live_standing_rule(model.clone()).await,
                     other => match team_graph::run_live(other, model.clone()).await {
                         Some(result) => result,
-                        None => web_mcp::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                        None => match web_mcp::run_live(other, model.clone()).await {
+                            Some(result) => result,
+                            None => hooks::run_live(other, model.clone()).await.unwrap_or_else(|| bail!("unknown scenario {other}")),
+                        },
                     },
                 };
                 let result = match &checks {
@@ -1038,7 +1045,7 @@ async fn main() -> Result<()> {
         }
     } else {
         let mut rows = Vec::new();
-        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED).chain(web_mcp::SCRIPTED) {
+        for name in SCRIPTED.iter().chain(team_graph::SCRIPTED).chain(web_mcp::SCRIPTED).chain(hooks::SCRIPTED) {
             if !selected.is_empty() && !selected.contains(name) {
                 continue;
             }

@@ -94,6 +94,16 @@ live scenarios on OpenAI, Anthropic and Gemini.
 [`harness_anthropic`](https://github.com/zavora-ai/adk-rust/tree/main/examples/harness_anthropic)
 walk through the spec 3.1 §5 capabilities on one provider each, scripted or live.
 
+## Hooks (feature `hooks`)
+
+A hook is a command that runs on a tool event — `pre_tool`, `post_tool`, `post_edit`,
+`on_hold`, `on_stop`, `on_session_start` — through the same launcher as `bash`, with the
+event as JSON on stdin. It can deny a call, fail or annotate a result, or notify the user; it
+can never allow a call, change the mode, create a rule or answer a call, and
+`{"decision":"allow"}` is ignored and audited. Workspace hooks (`.adk/harness.toml`) run
+only under the workspace's content-keyed trust. Every run is a `harness.hook.ran` record.
+See `docs/official_docs/harness/hooks.md`.
+
 ## Features
 
 | Feature | Default | Pulls in |
@@ -110,6 +120,7 @@ walk through the spec 3.1 §5 capabilities on one provider each, scripted or liv
 | `web` | off | `web_fetch`, `web_search`, screening and `ProviderWebTools` (`reqwest`, `adk-guardrail`); on in `adk-rust` |
 | `mcp` | off | MCP elicitation, sampling and resource bridges (`adk-tool/mcp`, `adk-tool/mcp-sampling`); on in `adk-rust` |
 | `web-fixture` | off | a loopback HTTP server stands in for the web in tests; never on in `adk-rust` |
+| `hooks` | off | `toml`; `[[hooks]]` from `.adk/harness.toml`, the user config and the builder, run through the shell's launcher (spec 3.1 §7.22) |
 | `sqlite` | off | SQLite mode, rule, shell-ledger and goal stores |
 | `ambient` | off | `adk-agent/ambient`: goals started by triggers |
 | `skills-registry`, `team-acp`, `team-a2a`, `docker`, `memory-graph` | off | registry skills, ACP and A2A members, containers, graph memory |
