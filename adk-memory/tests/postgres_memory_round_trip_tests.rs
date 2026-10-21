@@ -183,6 +183,59 @@ async fn assert_round_trip(dimensions: usize) {
     scratch.drop().await;
 }
 
+async fn search_above(service: &PostgresMemoryService, query: &str, min_score: f32) -> Vec<String> {
+    let response = service
+        .search(SearchRequest {
+            query: query.to_string(),
+            user_id: "user".to_string(),
+            app_name: "app".to_string(),
+            limit: Some(10),
+            min_score: Some(min_score),
+            project_id: None,
+        })
+        .await
+        .expect("search");
+    texts(&response.memories)
+}
+
+/// `min_score` keeps the entries at least that similar to the query and drops the rest,
+/// whatever the type pgvector returns the distance in.
+async fn assert_min_score(dimensions: usize) {
+    let scratch = Scratch::new().await;
+    let service = PostgresMemoryService::from_pool(
+        scratch.pool.clone(),
+        Some(Arc::new(TopicEmbedder { dimensions })),
+    );
+    service.migrate().await.expect("migrate");
+    service
+        .add_session(
+            "app",
+            "user",
+            "first",
+            vec![entry("An apple pie recipe"), entry("Rust's borrow checker, explained")],
+        )
+        .await
+        .expect("add session");
+
+    assert_eq!(search_above(&service, "apple", 0.5).await, ["An apple pie recipe"]);
+    assert_eq!(search_above(&service, "apple", 0.0).await.len(), 2);
+    assert_eq!(search_above(&service, "tide", 0.5).await, Vec::<String>::new());
+
+    scratch.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a PostgreSQL server with the pgvector extension at DATABASE_URL"]
+async fn postgres_min_score_with_vector_index() {
+    assert_min_score(8).await;
+}
+
+#[tokio::test]
+#[ignore = "requires a PostgreSQL server with the pgvector extension at DATABASE_URL"]
+async fn postgres_min_score_with_halfvec_index() {
+    assert_min_score(2048).await;
+}
+
 #[tokio::test]
 #[ignore = "requires a PostgreSQL server with the pgvector extension at DATABASE_URL"]
 async fn postgres_memory_round_trip_with_vector_index() {

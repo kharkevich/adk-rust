@@ -658,12 +658,14 @@ impl MemoryService for PostgresMemoryService {
             rows.iter()
                 .filter(|row| {
                     if let Some(threshold) = min_score {
-                        let score: f32 = row
-                            .try_get::<f32, _>("distance")
-                            .map(|d| 1.0 - d)
-                            .or_else(|_| row.try_get::<f32, _>("rank_score"))
+                        // pgvector's distance operators return `float8` and `ts_rank`
+                        // returns `float4`; sqlx refuses to read either as the other.
+                        let score = row
+                            .try_get::<f64, _>("distance")
+                            .map(|distance| 1.0 - distance)
+                            .or_else(|_| row.try_get::<f32, _>("rank_score").map(f64::from))
                             .unwrap_or(0.0);
-                        score >= threshold
+                        score >= f64::from(threshold)
                     } else {
                         true
                     }
