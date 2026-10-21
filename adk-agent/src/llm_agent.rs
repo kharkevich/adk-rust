@@ -2892,7 +2892,8 @@ impl ToolExecutor<'_> {
                 let ledgered = match crate::tool_ledger::begin_ledgered_call(
                     self.ctx.as_ref(),
                     effect,
-                    resumed_ledger_key.unwrap_or_else(|| tool_ctx.idempotency_key()),
+                    // A resumed call's context answers its held call's key.
+                    tool_ctx.idempotency_key(),
                     &name,
                     &final_args,
                 )
