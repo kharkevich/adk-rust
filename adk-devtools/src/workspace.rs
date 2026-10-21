@@ -415,14 +415,12 @@ impl Workspace {
     /// checked, without either guarantee.
     pub(crate) async fn read_contained(&self, target: &Path) -> Result<String, DevToolError> {
         let bytes = self.read_contained_bytes(target).await?;
+        // The same error `read_to_string` reports, on every platform.
         String::from_utf8(bytes).map_err(|_| {
-            self.open_error(
-                target,
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "stream did not contain valid UTF-8",
-                ),
-            )
+            DevToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
         })
     }
 
