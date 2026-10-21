@@ -124,11 +124,23 @@ fn cart_schema() -> Value {
     })
 }
 
-/// The JSON schema of a fulfillment selection, which the backend interprets.
+/// The JSON schema of a [`FulfillmentSelection`].
 fn fulfillment_schema() -> Value {
     serde_json::json!({
         "type": "object",
-        "description": "The fulfillment option the buyer chose, as the merchant's checkout offers it"
+        "description": "The fulfillment option the buyer chose, as the merchant's checkout offers it",
+        "properties": {
+            "fulfillmentId": { "type": "string" },
+            "kind": {
+                "type": "string",
+                "enum": ["shipping", "pickup", "delivery", "digital", "service"]
+            },
+            "label": { "type": "string" },
+            "amount": money_schema(),
+            "destination": { "type": "object", "description": "Where the order is fulfilled" },
+            "requiresUserSelection": { "type": "boolean" }
+        },
+        "required": ["fulfillmentId", "kind", "label"]
     })
 }
 
