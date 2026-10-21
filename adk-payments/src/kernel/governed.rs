@@ -398,7 +398,9 @@ impl PaymentGovernor {
                 // What the approver said and substituted travels with the decision's record.
                 let approver_exts = |draft: AuditRecordDraft, trail: &AuditTrail| {
                     let draft = match &message {
-                        Some(message) => draft.ext("approverMessage", Value::String(message.clone())),
+                        Some(message) => {
+                            draft.ext("approverMessage", Value::String(message.clone()))
+                        }
                         None => draft,
                     };
                     match &edited {
@@ -457,7 +459,11 @@ impl PaymentGovernor {
                 if let Some(error) = refusal {
                     context.release_holds().await;
                     if let Some((trail, draft)) = caller_record(refused_as, &findings) {
-                        let _ = trail.record(approver_exts(draft, &trail)).await;
+                        // An approval with edited arguments is recorded as approved, and as
+                        // not run, since the operation as proposed never runs.
+                        let draft =
+                            approver_exts(draft, &trail).outcome(AuditRecordOutcome::NotRun);
+                        let _ = trail.record(draft).await;
                     }
                     // An approval with edited arguments refuses nothing: the operation runs
                     // when the caller re-issues it, and that run is audited.

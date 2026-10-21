@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use adk_core::{
     AdkError, ApprovalScope, ErrorCategory, ErrorComponent, PolicyCall, PolicyDecision, Result,
-    Tool, ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest, ToolContext,
-    ToolEffect, ToolGate, ToolOrigin, ToolPolicyRequest,
+    Tool, ToolApproval, ToolConfirmationDecision, ToolConfirmationRequest, ToolContext, ToolEffect,
+    ToolGate, ToolOrigin, ToolPolicyRequest,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -338,9 +338,8 @@ where
             .with_invocation_id(ctx.invocation_id())
             .with_acting_context(ctx.acting_context());
         let origin = ToolOrigin::of(tool);
-        let call = PolicyCall::new()
-            .with_origin(&origin)
-            .with_function_call_id(ctx.function_call_id());
+        let call =
+            PolicyCall::new().with_origin(&origin).with_function_call_id(ctx.function_call_id());
         match policy.evaluate_call(&request, &call).await {
             PolicyDecision::Deny { reason } => {
                 return Err(AdkError::new(

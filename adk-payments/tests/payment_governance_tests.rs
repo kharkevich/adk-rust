@@ -21,6 +21,7 @@ use adk_payments::domain::{
     Cart, CartLine, CommerceActor, CommerceActorRole, CommerceMode, MerchantRef, Money,
     ProtocolDescriptor, ProtocolExtensions, TransactionId, TransactionRecord,
 };
+use adk_payments::guardrail::PaymentPolicyFinding;
 use adk_payments::guardrail::{
     AmountThresholdGuardrail, MerchantAllowlistGuardrail, PaymentPolicySet,
 };
@@ -28,11 +29,9 @@ use adk_payments::kernel::{
     CancelCheckoutCommand, CommerceContext, CompleteCheckoutCommand, CreateCheckoutCommand,
     GovernedCheckoutService, ListUnresolvedTransactionsRequest, MerchantCheckoutService,
     OrderUpdateCommand, PAYMENT_APPROVAL_DENIED_CODE, PAYMENT_APPROVAL_EDITED_CODE,
-    PAYMENT_APPROVAL_REQUIRED_CODE, PAYMENT_POLICY_DENIED_CODE, PaymentApproval,
-    PaymentApprover, PaymentCaller, PaymentDecision, TransactionLookup, TransactionStore,
-    UpdateCheckoutCommand,
+    PAYMENT_APPROVAL_REQUIRED_CODE, PAYMENT_POLICY_DENIED_CODE, PaymentApproval, PaymentApprover,
+    PaymentCaller, PaymentDecision, TransactionLookup, TransactionStore, UpdateCheckoutCommand,
 };
-use adk_payments::guardrail::PaymentPolicyFinding;
 use adk_payments::tools::PaymentToolsetBuilder;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -739,8 +738,10 @@ async fn the_governed_service_reports_an_edited_approval_for_the_caller_to_re_is
             session_identity: None,
             actor: CommerceActor {
                 actor_id: "shopper".to_string(),
-                role: CommerceActorRole::Agent,
+                role: CommerceActorRole::AgentSurface,
                 display_name: None,
+                tenant_id: None,
+                extensions: ProtocolExtensions::default(),
             },
             merchant_of_record: MerchantRef {
                 merchant_id: "merchant-1".to_string(),
