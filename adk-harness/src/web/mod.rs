@@ -10,6 +10,7 @@
 //! HTML-to-text pass and the screening need feature `web`.
 
 use std::fmt;
+#[cfg(feature = "web")]
 use std::sync::Arc;
 use std::time::Duration;
 
