@@ -306,16 +306,6 @@ fn requires_action(stop: Option<StopReason>) -> Vec<String> {
     }
 }
 
-async fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
-    for _ in 0..400 {
-        if done() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("timed out waiting for {what}");
-}
-
 async fn start(
     runtime: &DefaultManagedAgentRuntime,
     def: ManagedAgentDef,
