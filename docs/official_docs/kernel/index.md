@@ -108,10 +108,12 @@ async fn run(runner: Arc<adk_rust::runner::Runner>) -> adk_rust::kernel::Result<
 | `postgres`, `redis` | off | The kernel's stores in the backend replicas share |
 | `webhooks` | on | Webhook wake sources over `WebhookIngress` |
 | `proc` | on | The live aggregates' OTel GenAI histograms |
-| `conformance` | off | `process_store_conformance_tests!` for a new store backend |
+| `conformance` | off | `process_store_conformance_tests!` and `partition_store_conformance_tests!` for a new store backend |
 
 ## Read next
 
 - [Kernel commands](cli.md): `up`, `attach`, `ps`, `top`, `kill`, `suspend`, `resume`,
   `freeze`, `unfreeze`, `events`, and `goal` on a running kernel
 - [The control plane](control-plane.md): transports, authentication, routes and audit records
+- [Partitions](partitions.md): one harness per partition, memory scoping, and crossings by the
+  coordinator under approval

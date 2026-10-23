@@ -119,6 +119,7 @@ control plane, then builds and starts the kernel.
 | Approvals | A decision through the harness's approval service wakes the process asleep on `Wake::Approval` for that call |
 | Process view | A `ProgressSource`: a goal's iteration of max, duration and last check, the loop guard's verdict, and the session's model calls, tool calls and cost for spend attribution |
 | Goals | The goal thread keeps the last `2 × GOAL_STALL_WINDOW` checkpoints. Under a kernel, a goal whose check repeats its last `GOAL_STALL_WINDOW` (3) results, or whose iteration made no tool call (`Graph` engine), records `harness.goal.stalled` and parks `Waiting` before its next model call instead of spending its iteration cap |
+| Partitions | `HarnessAgentBuilder::partition(partition, partitions)` builds one partition's harness: its mode, its class and tenant on every agent's principal, its `memory_scope` as the project of every long-term fact and of its working notes, its drivers (`partition_drivers`), and its `PartitionPolicy`; `partition_coordinator` marks the one harness that may cross into another partition, under a non-waivable approval (spec 3.2 §7.8, K-I15). `host_partition` adds a partition's harness to a kernel as `<app>@<partition>` and `harness.goal@<partition>` |
 
 ```rust,ignore
 use std::sync::Arc;

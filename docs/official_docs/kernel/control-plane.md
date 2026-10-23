@@ -45,6 +45,9 @@ All routes are under `/api`, on both transports. `adk-rust up` merges them into 
 | `GET /kernel/events?after=` | The event bus as server-sent events from a cursor; `Last-Event-ID` wins over `after` | — | — |
 | `POST /kernel/attach/{session}` | Transcript since a cursor, held calls, the process running the session | — | `attach` |
 | `POST /kernel/freeze`, `POST /kernel/unfreeze` | `Kernel::freeze` and `Kernel::unfreeze`; the answer reports `parkedRuns` | Yes | `freeze`, `unfreeze` |
+| `GET /kernel/partitions` | The [partition](partitions.md) table | — | — |
+| `POST /kernel/partitions` | Create or replace a partition; body: the partition record | Yes | `partition.put` |
+| `POST /kernel/partitions/{id}/mode` | Set a partition's mode; body `{"mode": "auto"}` | Yes | `partition.mode` |
 | `/approvals…` | The approvals inbox, unchanged; the socket serves it too | Per inbox rules | Inbox records |
 
 On HTTP the server's own routes stay beside them: `/api/runs` (submissions land on the
