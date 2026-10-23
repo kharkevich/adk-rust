@@ -145,7 +145,8 @@ impl PartitionMode {
 
 impl fmt::Display for PartitionMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        // `pad`, so a width or alignment in the format string applies.
+        f.pad(self.as_str())
     }
 }
 
@@ -207,7 +208,7 @@ impl CrossPartition {
 
 impl fmt::Display for CrossPartition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
