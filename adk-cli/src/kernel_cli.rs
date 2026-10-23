@@ -724,9 +724,18 @@ mod tests {
         assert!(partition_row(&adk_kernel::Partition::new("home", "home")).contains(" - "));
         assert!(partition_header().starts_with("ID"));
         // Every column keeps its width, the mode and the crossing setting included.
-        let columns: Vec<usize> = row.match_indices("auto").map(|(at, _)| at).collect();
-        assert_eq!(columns, [partition_header().find("MODE").unwrap()]);
-        assert_eq!(row.find("coordinator_with_approval"), partition_header().find("CROSSINGS"));
+        let aligned = partition_row(
+            &adk_kernel::Partition::new("work", "work")
+                .with_mode(adk_kernel::PartitionMode::Auto)
+                .with_cross_partition(adk_kernel::CrossPartition::CoordinatorWithApproval),
+        );
+        let header = partition_header();
+        assert_eq!(aligned.find("auto"), header.find("MODE"), "{aligned}");
+        assert_eq!(
+            aligned.find("coordinator_with_approval"),
+            header.find("CROSSINGS"),
+            "{aligned}"
+        );
     }
 
     #[test]
