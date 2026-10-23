@@ -8,10 +8,11 @@
 //! | Store | Harness | Test macro | Cases |
 //! |-------|---------|------------|-------|
 //! | [`ProcessStore`](crate::ProcessStore) | [`ProcessStoreHarness`] | [`process_store_conformance_tests!`](crate::process_store_conformance_tests) | [`process_store`] |
+//! | [`PartitionStore`](crate::PartitionStore) | [`PartitionStoreHarness`] | [`partition_store_conformance_tests!`](crate::partition_store_conformance_tests) | [`partition_store`] |
 //!
 //! In-memory and SQLite run on the PR tier; PostgreSQL and Redis run in the CI `postgres`
-//! job, `#[ignore]`d elsewhere. The agenda, driver, partition and ledger suites arrive with
-//! their stores.
+//! job, `#[ignore]`d elsewhere. The agenda, driver and ledger suites arrive with their
+//! stores.
 //!
 //! A harness opens the backend; each call to `open` returns a new handle over the same
 //! data, as a restarted or second process would see it. Each case writes under fresh
@@ -42,9 +43,72 @@
 //! adk_kernel::process_store_conformance_tests! { harness = InMemory }
 //! ```
 
+pub mod partition_store;
 pub mod process_store;
 
+pub use partition_store::PartitionStoreHarness;
 pub use process_store::ProcessStoreHarness;
+
+/// Generates one test per [`partition_store`] case for a [`PartitionStoreHarness`] (spec 3.2
+/// §7.8, §11).
+///
+/// Used as [`process_store_conformance_tests!`](crate::process_store_conformance_tests) is;
+/// see the [module documentation](crate::conformance).
+#[macro_export]
+macro_rules! partition_store_conformance_tests {
+    ($(#[$attr:meta])* harness = $harness:expr $(,)?) => {
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_put_get_round_trip() {
+            $crate::conformance::partition_store::put_get_round_trip(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_put_replaces() {
+            $crate::conformance::partition_store::put_replaces(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_list_orders_by_id() {
+            $crate::conformance::partition_store::list_orders_by_id(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_delete() {
+            $crate::conformance::partition_store::delete(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_unknown_partition() {
+            $crate::conformance::partition_store::unknown_partition(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_crossings_filter_and_order() {
+            $crate::conformance::partition_store::crossings_filter_and_order(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_crossing_records_round_trip() {
+            $crate::conformance::partition_store::crossing_records_round_trip(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_run_grants_stay_in_their_run() {
+            $crate::conformance::partition_store::run_grants_stay_in_their_run(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_records_survive_a_restart() {
+            $crate::conformance::partition_store::records_survive_a_restart(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_concurrent_writers() {
+            $crate::conformance::partition_store::concurrent_writers(&$harness).await;
+        }
+    };
+}
 
 /// Generates one test per [`process_store`] case for a [`ProcessStoreHarness`].
 ///

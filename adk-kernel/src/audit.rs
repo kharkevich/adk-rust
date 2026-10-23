@@ -14,8 +14,10 @@
 //! | [`PROCESS_SPAWNED`], [`PROCESS_WOKEN`], [`PROCESS_SUSPENDED`], [`PROCESS_RESUMED`], [`PROCESS_KILLED`], [`PROCESS_REQUEUED`] | `pid`, `parent`, `partition`, `queue`, `kind`, `wake`, `reason`, `by` |
 //! | [`WAKE`] | `source`, `key`, `matchedPid` or `newPid`, `deduplicated` |
 //! | [`CONTROL`] | `subject`, `transport`, `action`, `target` |
+//! | [`PARTITION_CREATED`], [`PARTITION_CHANGED`] | `partition`, `fields`, `from`, `to` |
+//! | [`PARTITION_CROSSING`] | `partition`, `to`, `resource`, `name`, `access`, `outcome`, `run`, `tool`, `fingerprintDigest`, `reason`, `by` |
 //!
-//! The agenda, driver, partition and observation actions of §9.3 arrive with their phases.
+//! The agenda, driver and observation actions of §9.3 arrive with their phases.
 //!
 //! # Example
 //!
@@ -53,3 +55,9 @@ pub const PROCESS_REQUEUED: &str = "kernel.process.requeued";
 pub const WAKE: &str = "kernel.wake";
 /// A control-plane action.
 pub const CONTROL: &str = "kernel.control";
+/// A partition was created (spec 3.2 §7.8).
+pub const PARTITION_CREATED: &str = "kernel.partition.created";
+/// A partition's record changed: its mode, memory scope, drivers, crossings or blocks.
+pub const PARTITION_CHANGED: &str = "kernel.partition.changed";
+/// A request reached, or tried to reach, another partition (K-I15).
+pub const PARTITION_CROSSING: &str = "kernel.partition.crossing";

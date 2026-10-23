@@ -65,6 +65,8 @@ opentelemetry = { workspace = true, optional = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Digests of crossing fingerprints, so the crossing ledger holds no argument text.
+sha2.workspace = true
 sqlx = { workspace = true, optional = true, features = ["runtime-tokio", "chrono", "json"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net", "fs", "signal"] }
@@ -77,6 +79,8 @@ uuid.workspace = true
 # Internal dev-deps are path-only (no version) so cargo strips them from the published
 # manifest. The self dependency lets the crate's own tests run the conformance suites.
 adk-kernel = { path = ".", features = ["conformance"] }
+# A project-scoped memory for the partition memory tests.
+adk-memory = { path = "../adk-memory" }
 # ScriptedLlm for the scenario tests on a real DurableWorker.
 adk-model = { path = "../adk-model", default-features = false }
 adk-session = { path = "../adk-session", features = ["sqlite"] }

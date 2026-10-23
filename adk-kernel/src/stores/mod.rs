@@ -13,6 +13,11 @@
 //! | PostgreSQL | `PostgresProcessStore` | `postgres` | the URL of `adk-rust serve --store` |
 //! | Redis | `RedisProcessStore` | `redis` | the URL of `adk-rust serve --store` |
 //!
+//! Phase 3 adds the [`PartitionStore`](crate::PartitionStore) — the partition table and the
+//! crossing ledger (§7.8) — on the same four backends ([`InMemoryPartitionStore`],
+//! `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`, suite
+//! `partition_store_conformance_tests!`).
+//!
 //! There is no file backend (§13 Q8). MongoDB, Firestore and Neo4j backends are phase 4,
 //! and the agenda, driver, partition and ledger stores arrive with their phases.
 
@@ -30,6 +35,11 @@ use crate::sched::QueueClass;
 use crate::wake::WakeSet;
 
 mod memory;
+mod partition_memory;
+#[cfg(feature = "redis")]
+mod partition_redis;
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) mod partition_sql;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "redis")]
@@ -40,6 +50,13 @@ mod sql;
 mod sqlite;
 
 pub use memory::InMemoryProcessStore;
+pub use partition_memory::InMemoryPartitionStore;
+#[cfg(feature = "redis")]
+pub use partition_redis::RedisPartitionStore;
+#[cfg(feature = "postgres")]
+pub use partition_sql::PostgresPartitionStore;
+#[cfg(feature = "sqlite")]
+pub use partition_sql::SqlitePartitionStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProcessStore;
 #[cfg(feature = "redis")]

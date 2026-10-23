@@ -28,7 +28,8 @@
 //! | [`Wake`], [`WakeSet`], [`ExpiryAction`], [`WakeSource`], [`WakeEvent`], [`keys`], [`Trigger`], [`WakeRouter`], [`WakeOutcome`], [`KernelWakeExecutor`], the wake source adapters | §7.4 |
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`QueueClass`] | §7.9 |
-//! | [`PartitionId`], [`PartitionMode`] | §7.8 (the phase-1 part) |
+//! | [`PartitionId`], [`PartitionMode`], [`Partition`], [`CrossPartition`], [`PartitionStore`], [`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`, [`Partitions`] | §7.8 |
+//! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
 //! | `conformance` (feature `conformance`) | §11 |
@@ -96,19 +97,31 @@ pub use bus::{
 };
 pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
-pub use partition::{PartitionId, PartitionMode};
+pub use partition::{
+    CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
+    CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingTool, Partition,
+    PartitionId, PartitionMode, PartitionPolicy, PartitionStore, Partitions,
+};
 pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,
     ProcessView, ProgressSource, RunUsage, Suspension,
 };
 pub use sched::QueueClass;
 #[cfg(feature = "postgres")]
+pub use stores::PostgresPartitionStore;
+#[cfg(feature = "postgres")]
 pub use stores::PostgresProcessStore;
+#[cfg(feature = "redis")]
+pub use stores::RedisPartitionStore;
 #[cfg(feature = "redis")]
 pub use stores::RedisProcessStore;
 #[cfg(feature = "sqlite")]
+pub use stores::SqlitePartitionStore;
+#[cfg(feature = "sqlite")]
 pub use stores::SqliteProcessStore;
-pub use stores::{InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope};
+pub use stores::{
+    InMemoryPartitionStore, InMemoryProcessStore, ProcessFilter, ProcessStore, SpendScope,
+};
 #[cfg(feature = "webhooks")]
 pub use wake::webhook_wake_hook;
 pub use wake::{
