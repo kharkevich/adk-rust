@@ -491,9 +491,46 @@ impl CrossingRoute {
     }
 }
 
-/// The run a crossing approval holds for: the durable run, else the invocation.
-fn run_key<'a>(durable_run_id: Option<&'a str>, invocation_id: &'a str) -> &'a str {
-    durable_run_id.unwrap_or(invocation_id)
+/// The run an approved read holds for (spec 3.2 §13 Q3): a durable run, across the
+/// invocations that resume it, or one invocation outside a durable run.
+///
+/// A durable run's approved reads are kept in the [`PartitionStore`](super::PartitionStore)
+/// and released when the kernel's worker finishes the run; an invocation's are kept in
+/// memory and released when its root agent ends. Neither outlives its run, and run and
+/// invocation ids are never reused.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::CrossingRun;
+///
+/// assert_eq!(CrossingRun::of(Some("run-1"), "inv-1"), CrossingRun::Durable("run-1".into()));
+/// assert_eq!(CrossingRun::of(None, "inv-1").as_str(), "inv-1");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CrossingRun {
+    /// A [`DurableRunStore`](adk_core::DurableRunStore) run.
+    Durable(String),
+    /// An invocation outside a durable run.
+    Invocation(String),
+}
+
+impl CrossingRun {
+    /// The durable run `durable_run_id` when there is one, else the invocation.
+    pub fn of(durable_run_id: Option<&str>, invocation_id: &str) -> Self {
+        match durable_run_id {
+            Some(run) => Self::Durable(run.to_string()),
+            None => Self::Invocation(invocation_id.to_string()),
+        }
+    }
+
+    /// The run's id, as the crossing ledger records it.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Durable(id) | Self::Invocation(id) => id,
+        }
+    }
 }
 
 /// The policy of one partition's harness (spec 3.2 §7.8, K-I15): a `ToolPolicy` that
@@ -643,7 +680,7 @@ impl PartitionPolicy {
             .with_origin(ToolOrigin::of(tool));
         let fingerprint = crossing.fingerprint(&request);
         let durable = ctx.run_config().and_then(|config| config.durable_run_id.clone());
-        let run = run_key(durable.as_deref(), ctx.invocation_id()).to_string();
+        let run = CrossingRun::of(durable.as_deref(), ctx.invocation_id());
         let value = body().await?;
         if let Err(error) = self
             .partitions
@@ -695,7 +732,7 @@ impl ToolPolicy for PartitionPolicy {
             confirmation = confirmation.with_origin(origin.clone());
         }
         let fingerprint = crossing.fingerprint(&confirmation);
-        let run = run_key(call.durable_run_id, &request.invocation_id);
+        let run = CrossingRun::of(call.durable_run_id, &request.invocation_id);
         let agent = request
             .acting
             .as_ref()
@@ -705,7 +742,7 @@ impl ToolPolicy for PartitionPolicy {
             self.partitions.decided(
                 &crossing,
                 &fingerprint,
-                run,
+                run.as_str(),
                 call.function_call_id,
                 &agent,
                 &request.tool_name,
@@ -721,7 +758,7 @@ impl ToolPolicy for PartitionPolicy {
             return PolicyDecision::deny(format!("partition crossing denied: {reason}"));
         }
         if crossing.access == CrossingAccess::Read
-            && self.partitions.granted(run, &fingerprint).await
+            && self.partitions.granted(&run, &fingerprint).await
         {
             decided(CrossingOutcome::RunGrant, None).await;
             return PolicyDecision::Allow;
@@ -745,7 +782,9 @@ const TOOL_NAME_MAX: usize = 64;
 /// Its declaration, annotations, origin and effect are the wrapped tool's, under its own
 /// name; its description names the crossing. The access is the caller's to state from the
 /// tool's effect class — [`Read`](CrossingAccess::Read) only for a driver tool of class
-/// `Read` — never from the tool's own hints (spec 3.1 I12).
+/// `Read`, never for `Financial` or `PublishPublic` — never from the tool's own hints (spec
+/// 3.1 I12, K-I9); a `Read` the tool does not also declare `ToolEffect::ReadOnly` for is
+/// taken as `Write`, so only a read both sides agree on is reused for the rest of a run.
 ///
 /// # Example
 ///
@@ -779,6 +818,12 @@ impl CrossingTool {
         name: impl Into<String>,
     ) -> Self {
         let to = to.into();
+        // A read is reused for the rest of a run only when the tool also declares itself
+        // read-only; a hint never widens what the caller stated (spec 3.1 I12, K-I9).
+        let access = match (access, inner.effect()) {
+            (CrossingAccess::Read, ToolEffect::ReadOnly) => CrossingAccess::Read,
+            _ => CrossingAccess::Write,
+        };
         let route = CrossingRoute::fixed(to.clone(), resource, access, name);
         let label = match &route {
             CrossingRoute::Fixed { name, .. } => format!("{to} › {name}"),

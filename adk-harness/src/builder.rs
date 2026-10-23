@@ -1972,13 +1972,23 @@ impl HarnessAgentBuilder {
             builder = builder
                 .tool_confirmation_policy(ToolConfirmationPolicy::PerTool(non_waivable.clone()));
         }
+        // An invocation's approved crossing reads end with it (spec 3.2 §13 Q3); a durable
+        // run's end with the run, released by the kernel's worker.
+        #[cfg(feature = "kernel")]
+        if let Some(wired) = &partition {
+            builder = builder.after_callback(crate::partition::release_on_end(
+                wired.wiring.policy.clone(),
+                self.name.clone(),
+            ));
+        }
         let agent = builder.build()?;
         // No run-wide approval answers a crossing (spec 3.2 K-I15).
         #[cfg(feature = "kernel")]
         let non_waivable: BTreeSet<String> = match &partition {
-            Some(wired) => {
-                non_waivable.into_iter().chain(wired.wiring.non_waivable(&wired.crossings)).collect()
-            }
+            Some(wired) => non_waivable
+                .into_iter()
+                .chain(wired.wiring.non_waivable(&wired.crossings))
+                .collect(),
             None => non_waivable,
         };
         let coordinator: Arc<dyn adk_core::Agent> = Arc::new(agent);

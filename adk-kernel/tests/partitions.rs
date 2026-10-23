@@ -12,7 +12,7 @@ use adk_core::{
 use adk_kernel::audit::{PARTITION_CHANGED, PARTITION_CREATED, PARTITION_CROSSING};
 use adk_kernel::{
     CrossPartition, Crossing, CrossingAccess, CrossingFilter, CrossingOutcome, CrossingResource,
-    CrossingRoute, Partition, PartitionId, PartitionMode, PartitionPolicy, Partitions,
+    CrossingRoute, CrossingRun, Partition, PartitionId, PartitionMode, PartitionPolicy, Partitions,
 };
 use adk_memory::{InMemoryMemoryService, MemoryServiceAdapter};
 use proptest::prelude::*;
@@ -208,8 +208,9 @@ async fn an_approved_read_holds_for_the_rest_of_its_run_and_nothing_beyond() {
     assert!(matches!(decide(&policy, &first, "c1").await, PolicyDecision::RequireApproval { .. }));
     // The person approved it; the crossing tool ran and recorded the approval.
     let (crossing, fingerprint) = crossing_of(&policy, &first);
+    let invocation = CrossingRun::Invocation("inv-1".into());
     partitions
-        .executed(&crossing, &fingerprint, "inv-1", "urn:adk:agent:app/harness", SEARCH)
+        .executed(&crossing, &fingerprint, &invocation, "urn:adk:agent:app/harness", SEARCH)
         .await
         .unwrap();
 
@@ -223,7 +224,10 @@ async fn an_approved_read_holds_for_the_rest_of_its_run_and_nothing_beyond() {
         request(REMEMBER, json!({ "partition": "work", "text": "x", "kind": "decision" }), "inv-1");
     let (write_crossing, write_print) = crossing_of(&policy, &write);
     assert!(matches!(decide(&policy, &write, "c4").await, PolicyDecision::RequireApproval { .. }));
-    partitions.executed(&write_crossing, &write_print, "inv-1", "agent", REMEMBER).await.unwrap();
+    partitions
+        .executed(&write_crossing, &write_print, &invocation, "agent", REMEMBER)
+        .await
+        .unwrap();
     assert!(
         matches!(decide(&policy, &write, "c5").await, PolicyDecision::RequireApproval { .. }),
         "a write stays one-shot"
@@ -252,13 +256,92 @@ async fn a_durable_runs_grant_spans_its_invocations() {
     let policy = policy(&partitions, "home", true);
     let first = read_work("inv-1");
     let (crossing, fingerprint) = crossing_of(&policy, &first);
-    partitions.executed(&crossing, &fingerprint, "run-9", "agent", SEARCH).await.unwrap();
+    let run = CrossingRun::Durable("run-9".into());
+    partitions.executed(&crossing, &fingerprint, &run, "agent", SEARCH).await.unwrap();
     let resumed = read_work("inv-2");
     assert_eq!(decide_in(&policy, &resumed, "c1", Some("run-9")).await, PolicyDecision::Allow);
     assert!(matches!(
         decide_in(&policy, &resumed, "c2", Some("run-10")).await,
         PolicyDecision::RequireApproval { .. }
     ));
+}
+
+/// A run with no durable run id keys its grant by its invocation; the grant is dropped when
+/// the invocation ends, so a later run, even one that reused the id, asks again.
+#[tokio::test]
+async fn an_invocations_grant_is_dropped_when_it_ends() {
+    let Setup { partitions, .. } = setup().await;
+    let policy = policy(&partitions, "home", true);
+    let read = read_work("inv-7");
+    let (crossing, fingerprint) = crossing_of(&policy, &read);
+    let invocation = CrossingRun::of(None, "inv-7");
+    assert_eq!(invocation, CrossingRun::Invocation("inv-7".into()));
+    partitions.executed(&crossing, &fingerprint, &invocation, "agent", SEARCH).await.unwrap();
+    assert_eq!(decide(&policy, &read, "c1").await, PolicyDecision::Allow);
+    assert_eq!(partitions.grants(&invocation).await.unwrap().len(), 1);
+    assert_eq!(partitions.release_run(&invocation).await.unwrap(), 1);
+    assert!(partitions.grants(&invocation).await.unwrap().is_empty());
+    assert!(
+        matches!(decide(&policy, &read, "c2").await, PolicyDecision::RequireApproval { .. }),
+        "a released invocation holds no grant"
+    );
+    // A durable run's grant is the store's, released the same way.
+    let durable = CrossingRun::of(Some("run-3"), "inv-8");
+    partitions.executed(&crossing, &fingerprint, &durable, "agent", SEARCH).await.unwrap();
+    assert_eq!(partitions.store().grants("run-3").await.unwrap().len(), 1);
+    partitions.release_run(&durable).await.unwrap();
+    assert!(partitions.store().grants("run-3").await.unwrap().is_empty());
+}
+
+/// K-I9: a write, and a driver tool that does not declare itself read-only — a
+/// `Financial` or `PublishPublic` call among them — is never kept as a grant, whatever
+/// access the caller stated.
+#[tokio::test]
+async fn writes_and_acting_driver_calls_are_never_reusable_grants() {
+    use adk_core::{Tool, ToolContext, ToolEffect};
+    use adk_kernel::CrossingTool;
+
+    struct Pay;
+    #[async_trait::async_trait]
+    impl Tool for Pay {
+        fn name(&self) -> &str {
+            "send_invoice"
+        }
+        fn description(&self) -> &str {
+            "pays an invoice"
+        }
+        fn effect(&self) -> ToolEffect {
+            ToolEffect::NonIdempotent
+        }
+        async fn execute(
+            &self,
+            _ctx: Arc<dyn ToolContext>,
+            _args: Value,
+        ) -> adk_core::Result<Value> {
+            Ok(json!({}))
+        }
+    }
+
+    let Setup { partitions, .. } = setup().await;
+    let policy = policy(&partitions, "home", true);
+    // The caller says Read, the tool does not declare itself read-only: one-shot.
+    let tool = CrossingTool::new(
+        Arc::new(Pay),
+        &policy,
+        "work",
+        CrossingResource::Driver,
+        CrossingAccess::Read,
+        "billing",
+    );
+    let route = policy.route(tool.name()).unwrap();
+    let crossing = route.crossing(policy.home(), &json!({})).unwrap();
+    assert_eq!(crossing.access, CrossingAccess::Write);
+    let call = request(tool.name(), json!({ "invoice": 7 }), "inv-1");
+    let (crossing, fingerprint) = crossing_of(&policy, &call);
+    let invocation = CrossingRun::Invocation("inv-1".into());
+    partitions.executed(&crossing, &fingerprint, &invocation, "agent", tool.name()).await.unwrap();
+    assert!(partitions.grants(&invocation).await.unwrap().is_empty());
+    assert!(matches!(decide(&policy, &call, "c2").await, PolicyDecision::RequireApproval { .. }));
 }
 
 /// The crossing fingerprint extends the call's fingerprint with the target partition and

@@ -25,8 +25,9 @@ use adk_harness::{
 use adk_kernel::audit::PARTITION_CROSSING;
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::{
-    CrossPartition, CrossingFilter, CrossingOutcome, InMemoryProcessStore, KernelConfig, Partition,
-    PartitionId, Partitions, ProcessFilter, ProcessKind, ProcessSpec, ProcessStore, QueueClass,
+    CrossPartition, CrossingFilter, CrossingOutcome, CrossingRun, InMemoryProcessStore,
+    KernelConfig, Partition, PartitionId, Partitions, ProcessFilter, ProcessKind, ProcessSpec,
+    ProcessStore, QueueClass,
 };
 use adk_model::{ScriptedLlm, ScriptedResponse};
 use adk_server::background::DurableWorkerConfig;
@@ -277,9 +278,19 @@ async fn an_approved_read_holds_for_the_run_a_write_is_asked_and_the_next_run_as
         .unwrap();
     assert!(work_facts.iter().any(|fact| fact.text.contains("retro moves to friday")));
 
+    // The turn ran outside a durable run, so its grant was keyed by its invocation and
+    // dropped when it ended.
+    let ledger = world.partitions.crossings(&CrossingFilter::default()).await.unwrap();
+    let invocation = ledger[0].run.clone();
+    assert!(ledger.iter().all(|record| record.run == invocation), "one invocation: {ledger:?}");
+    let grants = world.partitions.grants(&CrossingRun::Invocation(invocation.clone())).await;
+    assert!(grants.unwrap().is_empty(), "the ended invocation holds no grant");
+
     // The next run asks again.
     send(&home, "h1", "and standup again?").await;
     assert_eq!(prompter.count(), 3);
+    let next = world.partitions.crossings(&CrossingFilter::default()).await.unwrap();
+    assert_ne!(next.last().unwrap().run, invocation, "a new run");
     assert_eq!(
         world.outcomes(),
         ["held", "approved", "runGrant", "held", "approved", "held", "approved"]
@@ -511,6 +522,12 @@ async fn k7_the_kernel_hosts_both_partitions_and_the_coordinators_crossing_parks
         ledger,
         [CrossingOutcome::Held, CrossingOutcome::Approved, CrossingOutcome::RunGrant]
     );
+    // The finished run holds no grant: the worker released it.
+    let durable = CrossingRun::Durable(pid.clone());
+    eventually("the finished run's grants to be released", || async {
+        world.partitions.grants(&durable).await.unwrap().is_empty().then_some(())
+    })
+    .await;
 
     // The next process asks again.
     let next = kernel

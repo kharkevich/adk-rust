@@ -5,7 +5,9 @@
 //! so a partition reads back exactly as written and later fields need no schema change.
 //! One row per crossing in `adk_kernel_crossings`: the columns a filter reads (`from_partition`,
 //! `to_partition`, `run_key`, `fingerprint`, `outcome`, and `at` in microseconds since the
-//! Unix epoch) beside the record as JSON text. Crossing rows are only ever inserted.
+//! Unix epoch) beside the record as JSON text. Crossing rows are only ever inserted. A
+//! durable run's live grants are rows of `adk_kernel_crossing_grants`, deleted when the run
+//! is released.
 //!
 //! Parameters appear in ascending order in every statement, so SQLite, which numbers `$N`
 //! parameters by first appearance, binds them as PostgreSQL does.
@@ -39,7 +41,12 @@ CREATE TABLE IF NOT EXISTS adk_kernel_crossings (\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_run ON adk_kernel_crossings (run_key, fingerprint);\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_from ON adk_kernel_crossings (from_partition, at, id);\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_to ON adk_kernel_crossings (to_partition, at, id);\
-CREATE INDEX IF NOT EXISTS adk_kernel_crossings_at ON adk_kernel_crossings (at, id);",
+CREATE INDEX IF NOT EXISTS adk_kernel_crossings_at ON adk_kernel_crossings (at, id);\
+CREATE TABLE IF NOT EXISTS adk_kernel_crossing_grants (\
+    run_key TEXT NOT NULL, \
+    fingerprint TEXT NOT NULL, \
+    PRIMARY KEY (run_key, fingerprint)\
+);",
 )];
 
 /// The PostgreSQL schema; ids take the `C` collation, so they order by the bytes of the
@@ -66,7 +73,12 @@ CREATE TABLE IF NOT EXISTS adk_kernel_crossings (\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_run ON adk_kernel_crossings (run_key, fingerprint);\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_from ON adk_kernel_crossings (from_partition, at, id);\
 CREATE INDEX IF NOT EXISTS adk_kernel_crossings_to ON adk_kernel_crossings (to_partition, at, id);\
-CREATE INDEX IF NOT EXISTS adk_kernel_crossings_at ON adk_kernel_crossings (at, id);",
+CREATE INDEX IF NOT EXISTS adk_kernel_crossings_at ON adk_kernel_crossings (at, id);\
+CREATE TABLE IF NOT EXISTS adk_kernel_crossing_grants (\
+    run_key TEXT NOT NULL, \
+    fingerprint TEXT NOT NULL, \
+    PRIMARY KEY (run_key, fingerprint)\
+);",
 )];
 
 pub(crate) const PUT: &str = "\
@@ -83,6 +95,15 @@ pub(crate) const RECORD_CROSSING: &str = "\
 INSERT INTO adk_kernel_crossings \
     (id, at, run_key, from_partition, to_partition, fingerprint, outcome, record) \
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)";
+
+pub(crate) const GRANT: &str = "\
+INSERT INTO adk_kernel_crossing_grants (run_key, fingerprint) VALUES ($1, $2) \
+ON CONFLICT (run_key, fingerprint) DO NOTHING";
+
+pub(crate) const GRANTS: &str =
+    "SELECT fingerprint FROM adk_kernel_crossing_grants WHERE run_key = $1 ORDER BY fingerprint";
+
+pub(crate) const RELEASE_RUN: &str = "DELETE FROM adk_kernel_crossing_grants WHERE run_key = $1";
 
 /// A value bound to a `crossings` statement.
 pub(crate) enum Bind {
@@ -266,6 +287,40 @@ macro_rules! sql_partition_store {
                         $crate::stores::partition_sql::decode_crossing($backend, record)
                     })
                     .collect()
+            }
+
+            async fn grant(&self, run: &str, fingerprint: &str) -> $crate::error::Result<()> {
+                sqlx::query($crate::stores::partition_sql::GRANT)
+                    .bind(run)
+                    .bind(fingerprint)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::stores::partition_sql::db_error($backend, "record a grant in", &e)
+                    })?;
+                Ok(())
+            }
+
+            async fn grants(&self, run: &str) -> $crate::error::Result<Vec<String>> {
+                let rows: Vec<(String,)> = sqlx::query_as($crate::stores::partition_sql::GRANTS)
+                    .bind(run)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::stores::partition_sql::db_error($backend, "read the grants in", &e)
+                    })?;
+                Ok(rows.into_iter().map(|(fingerprint,)| fingerprint).collect())
+            }
+
+            async fn release_run(&self, run: &str) -> $crate::error::Result<u64> {
+                let done = sqlx::query($crate::stores::partition_sql::RELEASE_RUN)
+                    .bind(run)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        $crate::stores::partition_sql::db_error($backend, "release grants in", &e)
+                    })?;
+                Ok(done.rows_affected())
             }
         }
     };

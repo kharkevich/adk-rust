@@ -1,6 +1,6 @@
 //! The in-memory [`PartitionStore`] (spec 3.2 §7.8, §13 Q8).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
@@ -30,6 +30,8 @@ use crate::partition::{CrossingFilter, CrossingRecord, Partition, PartitionId, P
 pub struct InMemoryPartitionStore {
     partitions: RwLock<BTreeMap<PartitionId, Partition>>,
     crossings: RwLock<Vec<CrossingRecord>>,
+    /// (run, fingerprint digest) of each live grant.
+    grants: RwLock<BTreeSet<(String, String)>>,
 }
 
 impl InMemoryPartitionStore {
@@ -75,5 +77,28 @@ impl PartitionStore for InMemoryPartitionStore {
         records.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
         records.truncate(filter.limit.unwrap_or(usize::MAX));
         Ok(records)
+    }
+
+    async fn grant(&self, run: &str, fingerprint: &str) -> Result<()> {
+        self.grants.write().await.insert((run.to_string(), fingerprint.to_string()));
+        Ok(())
+    }
+
+    async fn grants(&self, run: &str) -> Result<Vec<String>> {
+        Ok(self
+            .grants
+            .read()
+            .await
+            .iter()
+            .filter(|(granted, _)| granted == run)
+            .map(|(_, fingerprint)| fingerprint.clone())
+            .collect())
+    }
+
+    async fn release_run(&self, run: &str) -> Result<u64> {
+        let mut grants = self.grants.write().await;
+        let before = grants.len();
+        grants.retain(|(granted, _)| granted != run);
+        Ok((before - grants.len()) as u64)
     }
 }

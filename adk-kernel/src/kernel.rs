@@ -1467,6 +1467,10 @@ impl KernelBuilder {
         }
         let processes: Arc<dyn ProcessStore> =
             self.processes.unwrap_or_else(|| Arc::new(InMemoryProcessStore::new()));
+        let partitions = self.partitions.unwrap_or_else(Partitions::in_memory);
+        if let Some(trail) = &self.audit {
+            partitions.attach_audit(trail.clone());
+        }
         let bus = EventBus::default();
         for sink in self.sinks {
             bus.add_sink(sink);
@@ -1496,11 +1500,8 @@ impl KernelBuilder {
             watched: std::sync::Mutex::new(BTreeMap::new()),
             clock: Arc::clone(&config.clock),
             partition_targets: self.partition_targets,
+            partitions: partitions.clone(),
         });
-        let partitions = self.partitions.unwrap_or_else(Partitions::in_memory);
-        if let Some(trail) = &self.audit {
-            partitions.attach_audit(trail.clone());
-        }
         let run_finished = Arc::new(RunFinishedWakeSource::new());
         let hooks =
             Arc::new(KernelHooks { sup: Arc::clone(&sup), run_finished: run_finished.clone() });

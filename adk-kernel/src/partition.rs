@@ -16,7 +16,7 @@
 //! beyond it; writes stay one-shot. [`Partitions`] keeps the partition table and the
 //! crossing ledger in a [`PartitionStore`].
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -37,7 +37,7 @@ mod crossing;
 
 pub use crossing::{
     CROSSING_PARTITION_ARG, Crossing, CrossingAccess, CrossingFilter, CrossingOutcome,
-    CrossingRecord, CrossingResource, CrossingRoute, CrossingTool, PartitionPolicy,
+    CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool, PartitionPolicy,
 };
 
 /// Names a partition: `work`, `home`, a team (spec 3.2 §7.8).
@@ -615,6 +615,29 @@ pub trait PartitionStore: Send + Sync {
     ///
     /// Returns [`KernelError::Store`] when the backend fails.
     async fn crossings(&self, filter: &CrossingFilter) -> Result<Vec<CrossingRecord>>;
+
+    /// Records that the read with crossing-fingerprint digest `fingerprint` was approved in
+    /// the durable run `run`, for the rest of that run (spec 3.2 §13 Q3). Granting twice
+    /// keeps one grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`] when the backend fails.
+    async fn grant(&self, run: &str, fingerprint: &str) -> Result<()>;
+
+    /// The fingerprint digests the durable run `run` holds grants for.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`] when the backend fails.
+    async fn grants(&self, run: &str) -> Result<Vec<String>>;
+
+    /// Drops every grant of the durable run `run`, which finished; answers how many.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::Store`] when the backend fails.
+    async fn release_run(&self, run: &str) -> Result<u64>;
 }
 
 /// An unknown partition, as the control plane answers it (`404`).
@@ -630,6 +653,9 @@ pub(crate) fn unknown_partition(id: &PartitionId) -> KernelError {
 /// How many (run, call, outcome) triples the policy remembers having recorded, so the
 /// re-evaluations of one call (an edit, a prompt's re-check) record once.
 const RECORDED_CAP: usize = 4096;
+
+/// How many invocations' grants are kept in memory before they are all dropped.
+const INVOCATION_GRANTS_CAP: usize = 4096;
 
 /// The partition table and its crossings (spec 3.2 §7.8): reads and changes partitions
 /// with `kernel.partition.created` and `kernel.partition.changed` records, builds each
@@ -663,6 +689,9 @@ struct PartitionsInner {
     audit: OnceLock<AuditTrail>,
     clock: Arc<dyn Clock>,
     recorded: Mutex<HashSet<(String, String, CrossingOutcome)>>,
+    /// The approved reads of invocations outside a durable run, by invocation id; process
+    /// memory, so they end with the process if the invocation never does.
+    invocation_grants: Mutex<HashMap<String, HashSet<String>>>,
 }
 
 impl fmt::Debug for Partitions {
@@ -691,6 +720,7 @@ impl Partitions {
                 audit: OnceLock::new(),
                 clock,
                 recorded: Mutex::new(HashSet::new()),
+                invocation_grants: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -888,25 +918,71 @@ impl Partitions {
     }
 
     /// Whether the read `fingerprint` (a [`Crossing::fingerprint`]) was approved earlier in
-    /// `run`, so the coordinator's identical read needs no approval for the rest of the run.
-    /// A failed read of the ledger answers `false`: the crossing asks again.
-    pub async fn granted(&self, run: &str, fingerprint: &str) -> bool {
-        let filter = CrossingFilter::default()
-            .run(run)
-            .fingerprint(crossing::digest(fingerprint))
-            .outcomes([CrossingOutcome::Approved]);
-        match self.inner.store.crossings(&filter).await {
-            Ok(records) => records.iter().any(|record| record.access == CrossingAccess::Read),
-            Err(error) => {
-                tracing::warn!(error = %error, "could not read the crossing ledger; the crossing asks again");
-                false
-            }
+    /// `run` and the run still holds the grant, so the coordinator's identical read needs no
+    /// approval for the rest of the run (spec 3.2 §13 Q3). A failed read of the store answers
+    /// `false`: the crossing asks again.
+    pub async fn granted(&self, run: &CrossingRun, fingerprint: &str) -> bool {
+        let digest = crossing::digest(fingerprint);
+        match run {
+            CrossingRun::Invocation(id) => self
+                .inner
+                .invocation_grants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(id)
+                .is_some_and(|grants| grants.contains(&digest)),
+            CrossingRun::Durable(id) => match self.inner.store.grants(id).await {
+                Ok(grants) => grants.contains(&digest),
+                Err(error) => {
+                    tracing::warn!(error = %error, "could not read the run's crossing grants; the crossing asks again");
+                    false
+                }
+            },
         }
     }
 
-    /// Records that `crossing` ran in `run` after its approval: for a read, the approval
-    /// the coordinator's identical reads reuse for the rest of the run. A crossing tool calls
-    /// it after the governed path authorized the call.
+    /// The fingerprint digests `run` holds grants for.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error for a durable run.
+    pub async fn grants(&self, run: &CrossingRun) -> Result<Vec<String>> {
+        match run {
+            CrossingRun::Invocation(id) => {
+                let grants = self.inner.invocation_grants.lock().unwrap_or_else(|e| e.into_inner());
+                let mut digests: Vec<String> =
+                    grants.get(id).map(|set| set.iter().cloned().collect()).unwrap_or_default();
+                digests.sort();
+                Ok(digests)
+            }
+            CrossingRun::Durable(id) => self.inner.store.grants(id).await,
+        }
+    }
+
+    /// Drops every grant of `run`, which finished, so no later run can reuse one (spec 3.2
+    /// §13 Q3): the kernel's worker calls it when a durable run ends, the partition's
+    /// harness when an invocation outside a durable run ends. Answers how many it dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error for a durable run.
+    pub async fn release_run(&self, run: &CrossingRun) -> Result<u64> {
+        match run {
+            CrossingRun::Invocation(id) => Ok(self
+                .inner
+                .invocation_grants
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id)
+                .map_or(0, |grants| grants.len() as u64)),
+            CrossingRun::Durable(id) => self.inner.store.release_run(id).await,
+        }
+    }
+
+    /// Records that `crossing` ran in `run` after its approval, and, for a read, keeps the
+    /// approval the coordinator's identical reads reuse for the rest of the run. A write is
+    /// never kept: it is approved one call at a time. A crossing tool calls it after the
+    /// governed path authorized the call.
     ///
     /// # Errors
     ///
@@ -915,17 +991,18 @@ impl Partitions {
         &self,
         crossing: &Crossing,
         fingerprint: &str,
-        run: &str,
+        run: &CrossingRun,
         agent: &str,
         tool: &str,
     ) -> Result<()> {
-        if crossing.access == CrossingAccess::Read && self.granted(run, fingerprint).await {
+        let read = crossing.access == CrossingAccess::Read;
+        if read && self.granted(run, fingerprint).await {
             return Ok(());
         }
         let record = self.crossing_record(
             crossing,
             fingerprint,
-            run,
+            run.as_str(),
             agent,
             tool,
             CrossingOutcome::Approved,
@@ -933,6 +1010,20 @@ impl Partitions {
         );
         self.inner.store.record_crossing(record.clone()).await?;
         self.audit_crossing(&record).await;
+        if read {
+            match run {
+                CrossingRun::Invocation(id) => {
+                    let mut grants =
+                        self.inner.invocation_grants.lock().unwrap_or_else(|e| e.into_inner());
+                    // Dropping everything only makes later reads ask again.
+                    if grants.len() > INVOCATION_GRANTS_CAP {
+                        grants.clear();
+                    }
+                    grants.entry(id.clone()).or_default().insert(record.fingerprint);
+                }
+                CrossingRun::Durable(id) => self.inner.store.grant(id, &record.fingerprint).await?,
+            }
+        }
         Ok(())
     }
 

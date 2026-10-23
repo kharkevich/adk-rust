@@ -301,8 +301,16 @@ mod tests {
         ];
         assert_eq!(settings.partitions, expected);
         assert_eq!(settings.coordinator, Some("home".into()));
-        assert!(settings.notes.iter().any(|note| note.contains("kernel.partitions")), "{:?}", settings.notes);
-        assert!(settings.notes.iter().any(|note| note.contains("kernel.coordinator")), "{:?}", settings.notes);
+        assert!(
+            settings.notes.iter().any(|note| note.contains("kernel.partitions")),
+            "{:?}",
+            settings.notes
+        );
+        assert!(
+            settings.notes.iter().any(|note| note.contains("kernel.coordinator")),
+            "{:?}",
+            settings.notes
+        );
     }
 
     #[test]

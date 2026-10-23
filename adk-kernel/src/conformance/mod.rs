@@ -99,6 +99,11 @@ macro_rules! partition_store_conformance_tests {
         }
         $(#[$attr])*
         #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn partition_store_released_runs_hold_no_grants() {
+            $crate::conformance::partition_store::released_runs_hold_no_grants(&$harness).await;
+        }
+        $(#[$attr])*
+        #[::tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn partition_store_records_survive_a_restart() {
             $crate::conformance::partition_store::records_survive_a_restart(&$harness).await;
         }

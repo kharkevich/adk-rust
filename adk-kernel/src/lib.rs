@@ -29,7 +29,7 @@
 //! | [`KernelEvent`], [`EventRecord`], [`EventBus`], [`EventSubscriber`], [`EventSink`], [`AuditSink`], [`SpendDelta`] | §7.6 |
 //! | [`QueueClass`] | §7.9 |
 //! | [`PartitionId`], [`PartitionMode`], [`Partition`], [`CrossPartition`], [`PartitionStore`], [`InMemoryPartitionStore`], `SqlitePartitionStore`, `PostgresPartitionStore`, `RedisPartitionStore`, [`Partitions`] | §7.8 |
-//! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
+//! | [`Crossing`], [`CrossingResource`], [`CrossingAccess`], [`CrossingRun`], [`CrossingRecord`], [`CrossingOutcome`], [`CrossingFilter`], [`CrossingRoute`], [`PartitionPolicy`], [`CrossingTool`] | §7.8, §13 Q3, K-I15 |
 //! | [`control`]: [`ControlPlaneConfig`](control::ControlPlaneConfig), [`router`](control::router), [`ControlPlane`](control::ControlPlane), [`ControlClient`](control::ControlClient), [`api`](control::api) | §7.11 |
 //! | [`audit`] action names | §9.3 |
 //! | `conformance` (feature `conformance`) | §11 |
@@ -99,8 +99,8 @@ pub use error::{KernelError, Result};
 pub use kernel::{Kernel, KernelBuilder, KernelConfig, KernelHealth, KernelState, WorkerHealth};
 pub use partition::{
     CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
-    CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingTool, Partition,
-    PartitionId, PartitionMode, PartitionPolicy, PartitionStore, Partitions,
+    CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool,
+    Partition, PartitionId, PartitionMode, PartitionPolicy, PartitionStore, Partitions,
 };
 pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,

@@ -112,7 +112,9 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // One harness per partition when `[[kernel.partitions]]` names any (spec 3.2 §7.8).
     let table = match settings.partitions.is_empty() {
         true => None,
-        false => Some(open_partitions(&setup, &settings, stores.partitions.clone(), audit.as_ref()).await?),
+        false => Some(
+            open_partitions(&setup, &settings, stores.partitions.clone(), audit.as_ref()).await?,
+        ),
     };
     let hosted = match &table {
         None => {
@@ -128,8 +130,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             vec![host(&setup, agent, None, &governance, &run_store)?]
         }
         Some(table) => {
-            partition_harnesses(&setup, &settings, table, &service, audit.as_ref(), &governance, &run_store)
-                .await?
+            partition_harnesses(
+                &setup,
+                &settings,
+                table,
+                &service,
+                audit.as_ref(),
+                &governance,
+                &run_store,
+            )
+            .await?
         }
     };
     let primary = &hosted[0];
@@ -253,8 +263,9 @@ fn host(
         .approval_store(agent.runtime().approval_store().clone())
         .governance(governance.clone());
     if let Some(partition) = partition {
-        runner = runner
-            .identity_source(partition.identity_source(APP_NAME, adk_core::Agent::name(agent.as_ref())));
+        runner = runner.identity_source(
+            partition.identity_source(APP_NAME, adk_core::Agent::name(agent.as_ref())),
+        );
     }
     let harness = adk_harness::Harness::with_runner(agent.clone(), runner.build()?)?
         .with_run_store(run_store.clone())
@@ -275,7 +286,8 @@ async fn open_partitions(
     if let Some(recorder) = audit {
         table = table.with_audit(AuditTrail::new(recorder.clone()));
     }
-    let by = adk_core::audit_log::AuditActor::subject(adk_core::SubjectRef::human(setup.user.clone()));
+    let by =
+        adk_core::audit_log::AuditActor::subject(adk_core::SubjectRef::human(setup.user.clone()));
     for partition in &settings.partitions {
         match table.get(&partition.id).await? {
             None => table.put(partition.clone(), by.clone()).await?,

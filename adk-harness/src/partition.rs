@@ -199,6 +199,27 @@ impl PartitionWiring {
     }
 }
 
+/// The after-agent callback releasing the grants of the invocation that `root` ran, once
+/// it ends (spec 3.2 §13 Q3).
+pub(crate) fn release_on_end(
+    policy: PartitionPolicy,
+    root: String,
+) -> adk_core::AfterAgentCallback {
+    Box::new(move |ctx| {
+        let policy = policy.clone();
+        let root = root.clone();
+        Box::pin(async move {
+            if ctx.agent_name() == root {
+                let run = adk_kernel::CrossingRun::Invocation(ctx.invocation_id().to_string());
+                if let Err(error) = policy.partitions().release_run(&run).await {
+                    tracing::warn!(error = %error, "could not release the invocation's crossing grants");
+                }
+            }
+            Ok(None)
+        })
+    })
+}
+
 /// `text` as one path segment: itself when it is a plain name, its digest otherwise.
 #[cfg(feature = "memory")]
 fn path_segment(text: &str) -> String {

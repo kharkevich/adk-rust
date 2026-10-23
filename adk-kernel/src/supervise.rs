@@ -97,6 +97,8 @@ pub(crate) struct Supervision {
     /// The partition each partition agent's target runs (spec 3.2 §7.8,
     /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)).
     pub(crate) partition_targets: BTreeMap<String, PartitionId>,
+    /// The partition table, whose run grants a finished run releases (spec 3.2 §13 Q3).
+    pub(crate) partitions: crate::partition::Partitions,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -704,6 +706,13 @@ impl WorkerHooks for KernelHooks {
             self.run_finished.on_finish(run).await;
         }
         sup.release(&run.run_id).await;
+        // A finished run's approved crossing reads end with it (spec 3.2 §13 Q3).
+        if run.state.is_terminal() {
+            let finished = crate::partition::CrossingRun::Durable(run.run_id.clone());
+            if let Err(error) = sup.partitions.release_run(&finished).await {
+                tracing::warn!(run.id = %run.run_id, error = %error, "could not release the run's crossing grants");
+            }
+        }
         if run.state.is_terminal()
             && let Some(mut meta) = sup.stored_meta(run).await
             && (meta.suspend_requested || meta.suspended_by.is_some() || meta.wake.is_some())

@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use fred::prelude::{
     Builder, Client, ClientLike as _, Config, KeysInterface as _, LuaInterface as _,
+    SetsInterface as _,
 };
 use fred::types::Value;
 
@@ -64,6 +65,13 @@ end
 return out
 ";
 
+/// KEYS: the run's grant set. Returns how many grants it held, then drops it.
+const RELEASE_SCRIPT: &str = r"
+local held = redis.call('SCARD', KEYS[1])
+redis.call('DEL', KEYS[1])
+return held
+";
+
 /// A [`PartitionStore`] in Redis, shared by every replica (spec 3.2 §7.1, §7.8, feature
 /// `redis`).
 ///
@@ -80,6 +88,7 @@ return out
 /// | `{<ns>}:partitions` | Sorted set | Every partition id, scored 0, so it ranges in byte order |
 /// | `{<ns>}:crossing:<id>` | String | One crossing record, as JSON |
 /// | `{<ns>}:crossings`, `:crossings:run:<run>`, `:crossings:from:<partition>` | Sorted set | Crossing ids scored by time in microseconds: every crossing, one run's, one source partition's |
+/// | `{<ns>}:crossing-grants:<run>` | Set | The fingerprint digests of a durable run's live grants, dropped when the run is released |
 /// | `{<ns>}:partitions:layout` | String | The layout version [`migrate`](Self::migrate) recorded |
 ///
 /// Every write is one Lua script, which Redis runs atomically; crossing records are only
@@ -287,5 +296,36 @@ impl PartitionStore for RedisPartitionStore {
             }
         }
         Ok(out)
+    }
+
+    async fn grant(&self, run: &str, fingerprint: &str) -> Result<()> {
+        self.client
+            .sadd::<i64, _, _>(self.key(&format!("crossing-grants:{run}")), fingerprint)
+            .await
+            .map_err(|error| store_error("record a crossing grant", &error))?;
+        Ok(())
+    }
+
+    async fn grants(&self, run: &str) -> Result<Vec<String>> {
+        let mut grants: Vec<String> = self
+            .client
+            .smembers(self.key(&format!("crossing-grants:{run}")))
+            .await
+            .map_err(|error| store_error("read the crossing grants", &error))?;
+        grants.sort();
+        Ok(grants)
+    }
+
+    async fn release_run(&self, run: &str) -> Result<u64> {
+        let held: i64 = self
+            .client
+            .eval(
+                RELEASE_SCRIPT,
+                vec![self.key(&format!("crossing-grants:{run}"))],
+                Vec::<String>::new(),
+            )
+            .await
+            .map_err(|error| store_error("release the crossing grants", &error))?;
+        Ok(u64::try_from(held).unwrap_or(0))
     }
 }

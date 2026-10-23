@@ -10,6 +10,7 @@
 //! | [`crossings_filter_and_order`] | `crossings` applies source, target, run, fingerprint, outcomes, since and limit, and orders by time, then id |
 //! | [`crossing_records_round_trip`] | A crossing record reads back exactly as recorded, every outcome, resource and access included |
 //! | [`run_grants_stay_in_their_run`] | Through [`Partitions`], an approved read is granted for the rest of its run only; an approved write grants nothing |
+//! | [`released_runs_hold_no_grants`] | `grant` keeps one grant per run and fingerprint, `grants` lists a run's, and `release_run` drops them all and answers how many, leaving other runs' |
 //! | [`records_survive_a_restart`] | Partitions and crossings read back through a new handle (durable backends only) |
 //! | [`concurrent_writers`] | Concurrent puts and crossing records from two handles lose nothing |
 //!
@@ -25,7 +26,8 @@ use chrono::{DateTime, TimeZone, Utc};
 
 use crate::partition::{
     CrossPartition, Crossing, CrossingAccess, CrossingFilter, CrossingOutcome, CrossingRecord,
-    CrossingResource, Partition, PartitionId, PartitionMode, PartitionStore, Partitions,
+    CrossingResource, CrossingRun, Partition, PartitionId, PartitionMode, PartitionStore,
+    Partitions,
 };
 
 /// Opens a [`PartitionStore`] backend for the conformance suite.
@@ -300,7 +302,8 @@ pub async fn run_grants_stay_in_their_run(harness: &dyn PartitionStoreHarness) {
     let store = harness.open().await;
     let partitions = Partitions::new(store);
     let (home, work) = (partition_id(), partition_id());
-    let (run, next_run) = (unique("run"), unique("run"));
+    let (run, next_run) =
+        (CrossingRun::Durable(unique("run")), CrossingRun::Durable(unique("run")));
     let read = Crossing::new(
         home.clone(),
         work.clone(),
@@ -319,8 +322,31 @@ pub async fn run_grants_stay_in_their_run(harness: &dyn PartitionStoreHarness) {
     assert!(!partitions.granted(&run, &write_print).await, "a write stays one-shot");
     // A read the run already holds is not recorded again.
     partitions.executed(&read, &read_print, &run, "agent", "tool").await.expect("executed");
-    let approved = CrossingFilter::default().run(&run).outcomes([CrossingOutcome::Approved]);
+    let approved =
+        CrossingFilter::default().run(run.as_str()).outcomes([CrossingOutcome::Approved]);
     assert_eq!(partitions.crossings(&approved).await.expect("crossings").len(), 2);
+    assert_eq!(partitions.grants(&run).await.expect("grants").len(), 1, "the write is no grant");
+    // A finished run holds none.
+    assert_eq!(partitions.release_run(&run).await.expect("release"), 1);
+    assert!(!partitions.granted(&run, &read_print).await);
+}
+
+/// `grant` keeps one grant per run and fingerprint, `grants` lists a run's, and
+/// `release_run` drops them all and answers how many, leaving other runs'.
+pub async fn released_runs_hold_no_grants(harness: &dyn PartitionStoreHarness) {
+    let store = harness.open().await;
+    let (run, other) = (unique("run"), unique("run"));
+    for fingerprint in ["sha256:b", "sha256:a", "sha256:a"] {
+        store.grant(&run, fingerprint).await.expect("grant");
+    }
+    store.grant(&other, "sha256:a").await.expect("grant");
+    let reopened = if harness.is_durable() { harness.open().await } else { store.clone() };
+    assert_eq!(reopened.grants(&run).await.expect("grants"), ["sha256:a", "sha256:b"]);
+    assert_eq!(reopened.release_run(&run).await.expect("release"), 2);
+    assert!(reopened.grants(&run).await.expect("grants").is_empty());
+    assert_eq!(reopened.release_run(&run).await.expect("release again"), 0);
+    assert_eq!(reopened.grants(&other).await.expect("grants"), ["sha256:a"]);
+    reopened.release_run(&other).await.expect("release");
 }
 
 /// Partitions and crossings read back through a new handle (durable backends only).
