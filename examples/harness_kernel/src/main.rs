@@ -1,8 +1,8 @@
 //! Scenarios for the agent kernel (spec 3.2 §5, §11).
 //!
-//! Scripted, no keys: K1 and K5 on `ScriptedLlm` with a real kernel — durable workers, the
+//! Scripted, no keys: K1, K5 and K7 on `ScriptedLlm` with a real kernel — durable workers, the
 //! scheduler, SQLite stores and the control plane on a socket and loopback HTTP.
-//! Live (`--live`): K3 and K5 through the `adk-rust up` binary on a real model.
+//! Live (`--live`): K3, K5 and K7 through the `adk-rust up` binary on a real model.
 
 mod live;
 mod scripted;
@@ -43,10 +43,15 @@ const SCRIPTED: &[(&str, &str)] = &[
         "k5_one_job_many_windows",
         "a turn belongs to the terminal that runs it; there is no control plane to attach to",
     ),
+    (
+        "k7_partitions",
+        "one harness serves everything: every agent reads every fact, and nothing is a crossing",
+    ),
 ];
 
 /// The live scenarios.
-const LIVE: &[&str] = &["live_k5_approve_from_another_process", "live_k3_file_change_wakes"];
+const LIVE: &[&str] =
+    &["live_k5_approve_from_another_process", "live_k3_file_change_wakes", "live_k7_partitions"];
 
 fn verdict(result: &Result<Checks>) -> String {
     match result {

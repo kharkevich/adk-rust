@@ -1,4 +1,4 @@
-//! K1 and K5 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
+//! K1, K5 and K7 on `ScriptedLlm` with a real kernel (spec 3.2 §5, §11): the kernel's durable
 //! workers, its scheduler, SQLite stores in `harness.db`, and its control plane on a socket
 //! and loopback HTTP, composed as `adk-rust up` composes them, through `Harness::kernel`.
 
@@ -36,6 +36,7 @@ pub async fn run(name: &str) -> Result<Checks> {
     match name {
         "k1_leave_it_running" => k1_leave_it_running().await,
         "k5_one_job_many_windows" => k5_one_job_many_windows().await,
+        "k7_partitions" => k7_partitions().await,
         other => bail!("unknown scenario {other}"),
     }
 }
@@ -391,6 +392,232 @@ async fn k5_one_job_many_windows() -> Result<Checks> {
         controls.contains(&("spawn".into(), "socket".into()))
             && controls.contains(&("attach".into(), "socket".into())),
     );
+    kernel.stop().await?;
+    Ok(checks)
+}
+
+/// A partition's harness for K7, over the shared stores and fact store: memory scoped to the
+/// partition, its class on every principal, its crossings under the partition's policy.
+fn partition_harness(
+    stores: &Stores,
+    workspace: &Path,
+    partition: adk_kernel::Partition,
+    table: &adk_kernel::Partitions,
+    coordinator: bool,
+    replies: Vec<ScriptedResponse>,
+    facts: Arc<adk_harness::SqliteFactStore>,
+    service: Arc<dyn ApprovalService>,
+) -> Result<Harness> {
+    let mut builder = HarnessAgent::builder(APP)
+        .model(scripted(replies))
+        .workspace(adk_devtools::Workspace::new(workspace))
+        .project_instructions(InstructionsConfig {
+            user_file: None,
+            ..InstructionsConfig::default()
+        })
+        .without_default_members()
+        .approval_store(stores.approvals.clone())
+        .approval_service(service)
+        .long_term_memory(adk_harness::LongTermMemoryConfig {
+            distill: false,
+            ..adk_harness::LongTermMemoryConfig::default()
+        })
+        .fact_store(facts)
+        .partition(partition.clone(), table.clone());
+    if coordinator {
+        builder = builder.partition_coordinator();
+    }
+    let agent = Arc::new(builder.build()?);
+    let runner = adk_runner::Runner::builder()
+        .app_name(APP)
+        .agent(agent.agent())
+        .session_service(stores.sessions.clone())
+        .approval_store(agent.runtime().approval_store().clone())
+        .identity_source(partition.identity_source(APP, APP))
+        .build()?;
+    Ok(Harness::with_runner(agent, runner)?.with_run_store(stores.runs.clone()))
+}
+
+/// K7 (spec 3.2 §5, §7.8): home and work, each run by its own harness on one kernel, over
+/// one `harness.db`. A work agent asks for a home fact and is denied at the policy; the
+/// coordinator in home asks for a work fact, its process parks until a person approves the
+/// crossing in the inbox, and its identical read after the decision runs without asking;
+/// the next process asks again; every crossing is audited, without the query.
+async fn k7_partitions() -> Result<Checks> {
+    use adk_core::audit_log::AuditTrail;
+    use adk_harness::{
+        FactKind, FactScope, FactSource, FactStatus, FactStore, MemoryFact, Provenance,
+    };
+    use adk_kernel::{
+        CrossPartition, CrossingFilter, CrossingOutcome, CrossingRun, Partition, PartitionId,
+        ProcessKind, ProcessSpec,
+    };
+
+    let mut checks = Checks::default();
+    let dir = tempfile::tempdir()?;
+    let (home, workspace) = (dir.path().join("home"), dir.path().join("ws"));
+    std::fs::create_dir_all(&workspace)?;
+    let stores = stores(&home, Arc::new(SystemClock)).await?;
+    let pool = stores.sessions.pool().clone();
+    let partition_store = adk_kernel::SqlitePartitionStore::new(pool.clone());
+    partition_store.migrate().await?;
+    let facts = adk_harness::SqliteFactStore::new(pool);
+    facts.migrate().await?;
+    let facts = Arc::new(facts);
+    let recorder = InMemoryAuditRecorder::new();
+    let table = adk_kernel::Partitions::new(Arc::new(partition_store))
+        .with_audit(AuditTrail::new(Arc::new(recorder.clone())));
+    for id in ["home", "work"] {
+        let partition = Partition::new(id, format!("{id}-agents"))
+            .with_cross_partition(CrossPartition::CoordinatorWithApproval);
+        table.put(partition, adk_core::audit_log::AuditActor::default()).await?;
+    }
+    for (project, text) in
+        [("home", "dentist appointment on tuesday"), ("work", "standup is at nine")]
+    {
+        let scope = FactScope::new(APP, "alice", Some(project.into()));
+        let provenance = Provenance::new(FactSource::UserStated, "seed", "seed");
+        facts
+            .put(MemoryFact::new(scope, FactKind::ProjectFact, text, FactStatus::Known, provenance))
+            .await?;
+    }
+    let routing = ApprovalPolicy::new([ApproverSelector::group("operator")]).allow_self_approval();
+    let service: Arc<dyn ApprovalService> = Arc::new(
+        StoreApprovalService::new(stores.approvals.clone())
+            .with_router(routing)
+            .with_run_store(stores.runs.clone()),
+    );
+    let search = |partition: &str, query: &str| {
+        ScriptedResponse::function_call(
+            adk_harness::PARTITION_MEMORY_SEARCH,
+            json!({ "partition": partition, "query": query }),
+        )
+    };
+    let get = |id: &str| table.get(&PartitionId::new(id));
+    let home_partition = get("home").await?.context("home")?;
+    let work_partition = get("work").await?.context("work")?;
+    let coordinator = partition_harness(
+        &stores,
+        &workspace,
+        home_partition,
+        &table,
+        true,
+        vec![
+            search("work", "standup"),
+            search("work", "standup"),
+            ScriptedResponse::text("Standup is at nine."),
+            search("work", "standup"),
+            ScriptedResponse::text("asked again"),
+        ],
+        facts.clone(),
+        service.clone(),
+    )?;
+    let work = partition_harness(
+        &stores,
+        &workspace,
+        work_partition,
+        &table,
+        false,
+        vec![search("home", "dentist"), ScriptedResponse::text("not mine to see")],
+        facts,
+        service,
+    )?;
+    let kernel = work
+        .host_partition(coordinator.kernel())
+        .config(
+            KernelConfig::default()
+                .with_app_name(APP)
+                .with_home(&home)
+                .with_scheduler_tick(Duration::from_millis(250))
+                .with_control(ControlPlaneConfig::default().without_socket()),
+        )
+        .process_store(stores.processes.clone())
+        .build()?;
+    kernel.start().await?;
+    let spawn = |target: &str, session: &str| {
+        let run =
+            NewRun::new(QueueClass::INTERACTIVE, APP, "alice", target, json!({ "text": "?" }))
+                .with_session_id(session)
+                .with_authenticated_user();
+        kernel.processes().spawn(run, ProcessSpec::new(ProcessKind::Interactive))
+    };
+    let state = |pid: String| {
+        let runs = stores.runs.clone();
+        async move { Ok::<_, anyhow::Error>(runs.get(&pid).await?.map(|run| run.state)) }
+    };
+    let reaches = |pid: String, wanted: RunState| {
+        let state = state.clone();
+        async move {
+            until(Duration::from_secs(20), || {
+                let (pid, state) = (pid.clone(), state.clone());
+                async move { Ok(state(pid).await? == Some(wanted)) }
+            })
+            .await
+        }
+    };
+
+    let asked = spawn("adk-rust@work", "w1").await?;
+    checks.check("the work agent's process runs in work", asked.meta.partition.as_str() == "work");
+    checks.check("it completes", reaches(asked.meta.pid.clone(), RunState::Completed).await?);
+    let denied = table.crossings(&CrossingFilter::default().from("work")).await?;
+    checks.check(
+        "its read of a home fact was denied at the policy",
+        denied.len() == 1 && denied[0].outcome == CrossingOutcome::Denied,
+    );
+
+    let parked = spawn("adk-rust@home", "h1").await?;
+    let pid = parked.meta.pid.clone();
+    checks.check(
+        "the coordinator's crossing parks its process",
+        reaches(pid.clone(), RunState::Waiting).await?,
+    );
+    let alice = adk_core::UserId::new("alice")?;
+    let h1 = adk_core::SessionId::new("h1")?;
+    let pending = coordinator.pending_approvals(&alice, &h1).await?;
+    checks.check("one crossing waits in the inbox", pending.len() == 1);
+    if let Some(item) = pending.first() {
+        coordinator
+            .decide(&alice, &h1, &item.fingerprint, adk_harness::HarnessDecision::Approve)
+            .await?;
+    }
+    checks
+        .check("the approved process completes", reaches(pid.clone(), RunState::Completed).await?);
+    let ledger: Vec<CrossingOutcome> = table
+        .crossings(&CrossingFilter::default().run(&pid))
+        .await?
+        .into_iter()
+        .map(|record| record.outcome)
+        .collect();
+    checks.check(
+        "its identical second read ran without asking",
+        ledger == [CrossingOutcome::Held, CrossingOutcome::Approved, CrossingOutcome::RunGrant],
+    );
+    let released = until(Duration::from_secs(5), || {
+        let table = table.clone();
+        let run = CrossingRun::Durable(pid.clone());
+        async move { Ok(table.grants(&run).await?.is_empty()) }
+    })
+    .await?;
+    checks.check("the finished run holds no grant", released);
+
+    let next = spawn("adk-rust@home", "h2").await?;
+    checks.check(
+        "the next process asks again",
+        reaches(next.meta.pid.clone(), RunState::Waiting).await?,
+    );
+    let records: Vec<_> = recorder
+        .records()
+        .into_iter()
+        .filter(|draft| draft.action == adk_kernel::audit::PARTITION_CROSSING)
+        .collect();
+    checks.check("every crossing is audited", records.len() == 5);
+    checks.check(
+        "without the query",
+        records.iter().all(|draft| {
+            !serde_json::to_string(&draft.ext).unwrap_or_default().contains("standup")
+        }),
+    );
+    kernel.processes().kill(&next.meta.pid, "the scenario is over").await?;
     kernel.stop().await?;
     Ok(checks)
 }
