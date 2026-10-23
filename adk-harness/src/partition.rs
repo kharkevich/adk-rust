@@ -68,6 +68,12 @@ pub(crate) struct PartitionOptions {
     pub(crate) crossings: Vec<CrossingSpec>,
 }
 
+/// A partition's wiring and the coordinator's crossing tools, as the builder takes them.
+pub(crate) struct WiredPartition {
+    pub(crate) wiring: PartitionWiring,
+    pub(crate) crossings: Vec<Arc<dyn Tool>>,
+}
+
 /// A partition's harness as built (spec 3.2 §7.8): its record and its policy.
 #[derive(Clone, Debug)]
 pub(crate) struct PartitionWiring {
@@ -88,7 +94,7 @@ impl PartitionOptions {
         self,
         agent: &str,
         registry: &mut ToolClassRegistry,
-    ) -> Result<Option<(PartitionWiring, Vec<Arc<dyn Tool>>)>> {
+    ) -> Result<Option<WiredPartition>> {
         let Some((partition, partitions)) = self.partition else {
             if self.coordinator || !self.crossings.is_empty() {
                 return Err(AdkError::config(
@@ -126,7 +132,7 @@ impl PartitionOptions {
                 )) as Arc<dyn Tool>
             })
             .collect();
-        Ok(Some((PartitionWiring { partition, policy }, crossings)))
+        Ok(Some(WiredPartition { wiring: PartitionWiring { partition, policy }, crossings }))
     }
 }
 

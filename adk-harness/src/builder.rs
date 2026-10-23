@@ -1499,7 +1499,7 @@ impl HarnessAgentBuilder {
             // A partition keeps working notes of its own (spec 3.2 K-I15).
             #[cfg(feature = "kernel")]
             let config = match &partition {
-                Some((wiring, _)) => wiring.scope_notes(config, workspace.root()),
+                Some(wired) => wired.wiring.scope_notes(config, workspace.root()),
                 None => config,
             };
             let resolver =
@@ -1534,12 +1534,12 @@ impl HarnessAgentBuilder {
         }
         // Crossings into other partitions' facts, drivers and sessions (spec 3.2 §7.8).
         #[cfg(all(feature = "kernel", feature = "memory"))]
-        if let (Some((wiring, _)), Some(facts)) = (&partition, &facts) {
-            tools.extend(wiring.memory_tools(facts));
+        if let (Some(wired), Some(facts)) = (&partition, &facts) {
+            tools.extend(wired.wiring.memory_tools(facts));
         }
         #[cfg(feature = "kernel")]
-        if let Some((_, crossings)) = &partition {
-            tools.extend(crossings.iter().cloned());
+        if let Some(wired) = &partition {
+            tools.extend(wired.crossings.iter().cloned());
         }
         // Governed web tools (spec 3.1 §7.20): `web_search` only with a provider.
         #[cfg(feature = "web")]
@@ -1766,7 +1766,7 @@ impl HarnessAgentBuilder {
                 // A crossing is put to the person with its three answers (spec 3.2 §7.8).
                 #[cfg(feature = "kernel")]
                 let handler = match &partition {
-                    Some((wiring, _)) => handler.with_partition(wiring.clone()),
+                    Some(wired) => handler.with_partition(wired.wiring.clone()),
                     None => handler,
                 };
                 Some(Arc::new(handler))
@@ -1976,8 +1976,8 @@ impl HarnessAgentBuilder {
         // No run-wide approval answers a crossing (spec 3.2 K-I15).
         #[cfg(feature = "kernel")]
         let non_waivable: BTreeSet<String> = match &partition {
-            Some((wiring, crossings)) => {
-                non_waivable.into_iter().chain(wiring.non_waivable(crossings)).collect()
+            Some(wired) => {
+                non_waivable.into_iter().chain(wired.wiring.non_waivable(&wired.crossings)).collect()
             }
             None => non_waivable,
         };
@@ -2083,7 +2083,7 @@ impl HarnessAgentBuilder {
                 // The partition's policy makes the operator layer stricter (spec 3.2 K-I6).
                 #[cfg(feature = "kernel")]
                 operator_policy: match &partition {
-                    Some((wiring, _)) => Some(wiring.operator_policy(self.operator_policy)),
+                    Some(wired) => Some(wired.wiring.operator_policy(self.operator_policy)),
                     None => self.operator_policy,
                 },
                 #[cfg(not(feature = "kernel"))]
@@ -2127,7 +2127,7 @@ impl HarnessAgentBuilder {
                 #[cfg(feature = "kernel")]
                 kernel_approvals: self.kernel_approvals,
                 #[cfg(feature = "kernel")]
-                partition: partition.map(|(wiring, _)| wiring),
+                partition: partition.map(|wired| wired.wiring),
                 #[cfg(feature = "web")]
                 provider_web,
                 #[cfg(feature = "mcp")]

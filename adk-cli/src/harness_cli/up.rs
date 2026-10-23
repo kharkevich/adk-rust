@@ -31,6 +31,8 @@ const DEFAULT_BIND: &str = "127.0.0.1:8080";
 /// The kernel's own stores, in the backend the harness's stores are in.
 struct KernelStores {
     processes: Arc<dyn ProcessStore>,
+    /// The partition table and the crossing ledger (spec 3.2 §7.8).
+    partitions: Arc<dyn adk_kernel::PartitionStore>,
     schedules: Arc<dyn ScheduleStore>,
     /// The kill switch's shared state; `None` keeps it in this process.
     governance: Option<Arc<dyn GovernanceStateStore>>,
@@ -107,28 +109,30 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     if let Some(recorder) = &audit {
         governance.attach_audit(AuditTrail::new(recorder.clone()));
     }
-    let agent = Arc::new(setup.agent_with(
-        setup.resolved.effort,
-        APP_NAME,
-        setup.resolved.mode,
-        setup.resolved.sandbox,
-        None,
-        Some(service),
-        AgentExtras { budget: None, audit },
-    )?);
-    let runner = adk_runner::Runner::builder()
-        .app_name(APP_NAME)
-        .agent(agent.agent())
-        .session_service(setup.sessions())
-        .approval_store(agent.runtime().approval_store().clone())
-        .governance(governance.clone())
-        .build()?;
-    // The harness glue registers the runner as `adk-rust` and `harness.goal`, with the
-    // harness's sessions, approval service, kill switch, audit trail and goal progress
-    // (spec 3.2 §10 HK1); goals land on the background queue.
-    let harness = adk_harness::Harness::with_runner(agent.clone(), runner)?
-        .with_run_store(run_store.clone())
-        .with_goal_queue(QueueClass::BACKGROUND);
+    // One harness per partition when `[[kernel.partitions]]` names any (spec 3.2 §7.8).
+    let table = match settings.partitions.is_empty() {
+        true => None,
+        false => Some(open_partitions(&setup, &settings, stores.partitions.clone(), audit.as_ref()).await?),
+    };
+    let hosted = match &table {
+        None => {
+            let agent = Arc::new(setup.agent_with(
+                setup.resolved.effort,
+                APP_NAME,
+                setup.resolved.mode,
+                setup.resolved.sandbox,
+                None,
+                Some(service),
+                AgentExtras { budget: None, audit: audit.clone(), partition: None },
+            )?);
+            vec![host(&setup, agent, None, &governance, &run_store)?]
+        }
+        Some(table) => {
+            partition_harnesses(&setup, &settings, table, &service, audit.as_ref(), &governance, &run_store)
+                .await?
+        }
+    };
+    let primary = &hosted[0];
     let mut worker = DurableWorkerConfig::default();
     if let Some(max) = settings.max_concurrent_runs {
         worker = worker.with_max_concurrent_runs(max);
@@ -140,15 +144,34 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         .with_worker(worker)
         .with_control(control_plane())
         .with_clock(Arc::new(adk_core::SystemClock));
-    let kernel = harness
-        .kernel()
+    // The harness glue registers the runner as `adk-rust` and `harness.goal`, with the
+    // harness's sessions, approval service, kill switch, audit trail and goal progress
+    // (spec 3.2 §10 HK1); goals land on the background queue. A partition's harness runs as
+    // `adk-rust@<partition>` and `harness.goal@<partition>`, bound to its partition; the
+    // coordinator's also runs the CLI's own targets, so `attach`, `goal` and `/api/runs`
+    // reach it.
+    let (primary_goal, primary_runner) = primary.harness.goal_target();
+    let mut builder = primary.harness.kernel();
+    if let Some(partition) = &primary.partition {
+        builder = builder
+            .partition_agent(partition.clone(), APP_NAME, primary_runner.clone())
+            .partition_agent(partition.clone(), adk_harness::GOAL_TARGET, primary_runner.clone());
+    }
+    for other in &hosted[1..] {
+        builder = other.harness.host_partition(builder);
+    }
+    if let Some(table) = &table {
+        builder = builder.partitions(table.clone());
+    }
+    let kernel = builder
         .config(config)
         .process_store(stores.processes)
         .schedule_store(stores.schedules)
         .build()?;
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
-    let decisions = agent
+    let decisions = primary
+        .agent
         .runtime()
         .approval_service()
         .cloned()
@@ -156,15 +179,32 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
 
     // `/api/runs` submissions land on the interactive queue, where the kernel's worker
     // claims them; the server runs no worker of its own.
-    let (target, runner) = harness.goal_target();
-    let background = BackgroundState::new()
+    let mut background = BackgroundState::new()
         .with_run_store(run_store)
         .with_app_name(APP_NAME)
-        .with_agent(APP_NAME, runner.clone())
-        .with_agent(target, runner)
+        .with_agent(APP_NAME, primary_runner.clone())
+        .with_agent(adk_harness::GOAL_TARGET, primary_runner.clone())
+        .with_agent(primary_goal, primary_runner)
         .with_worker_config(DurableWorkerConfig::default().with_queue(QueueClass::INTERACTIVE))
         .with_embedded_worker(false)
         .with_governance(governance);
+    for hosted in &hosted {
+        if let Some(partition) = &hosted.partition {
+            let (goal, runner) = hosted.harness.goal_target();
+            background = background
+                .with_agent(adk_harness::partition_target(APP_NAME, partition), runner.clone())
+                .with_agent(goal, runner);
+        }
+    }
+    let partitions_note = hosted
+        .iter()
+        .filter_map(|hosted| hosted.partition.as_ref())
+        .map(|id| match settings.coordinator.as_ref() == Some(id) {
+            true => format!("{id} (coordinator)"),
+            false => id.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let agent = primary.agent.clone();
     let mut launcher = HarnessLauncher::shared(agent)
         .app_name(APP_NAME)
         .with_session_service(setup.sessions())
@@ -179,9 +219,110 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
             setup.user.clone(),
         )));
     }
-    println!("  store {}: sessions, approvals, runs, processes, schedules", stores.label);
+    println!(
+        "  store {}: sessions, approvals, runs, processes, schedules, partitions",
+        stores.label
+    );
+    if !partitions_note.is_empty() {
+        println!("  partitions {}", partitions_note.join(", "));
+    }
     println!("  plans {}", setup.plans_note());
     launcher.run_serve_directly(bind.port()).await.map_err(Into::into)
+}
+
+/// One harness `up` hosts: its agent, the harness over its runner, and its partition.
+struct Hosted {
+    agent: Arc<adk_harness::HarnessAgent>,
+    harness: adk_harness::Harness,
+    partition: Option<adk_kernel::PartitionId>,
+}
+
+/// The harness over `agent`'s runner, with the run store and the background goal queue;
+/// a partition's runner acts with the partition's class and tenant (spec 3.2 §7.8).
+fn host(
+    setup: &Setup,
+    agent: Arc<adk_harness::HarnessAgent>,
+    partition: Option<&adk_kernel::Partition>,
+    governance: &GovernanceControl,
+    run_store: &Arc<dyn adk_core::DurableRunStore>,
+) -> Result<Hosted> {
+    let mut runner = adk_runner::Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent.agent())
+        .session_service(setup.sessions())
+        .approval_store(agent.runtime().approval_store().clone())
+        .governance(governance.clone());
+    if let Some(partition) = partition {
+        runner = runner
+            .identity_source(partition.identity_source(APP_NAME, adk_core::Agent::name(agent.as_ref())));
+    }
+    let harness = adk_harness::Harness::with_runner(agent.clone(), runner.build()?)?
+        .with_run_store(run_store.clone())
+        .with_goal_queue(QueueClass::BACKGROUND);
+    Ok(Hosted { agent, harness, partition: partition.map(|partition| partition.id.clone()) })
+}
+
+/// The partition table in the kernel's store, with every `[[kernel.partitions]]` entry it
+/// lacks added; an entry the table already holds keeps the table's record, which
+/// `adk-rust partitions` changes (spec 3.2 §7.8, §8.1).
+async fn open_partitions(
+    setup: &Setup,
+    settings: &KernelSettings,
+    store: Arc<dyn adk_kernel::PartitionStore>,
+    audit: Option<&Arc<dyn AuditRecorder>>,
+) -> Result<adk_kernel::Partitions> {
+    let mut table = adk_kernel::Partitions::new(store);
+    if let Some(recorder) = audit {
+        table = table.with_audit(AuditTrail::new(recorder.clone()));
+    }
+    let by = adk_core::audit_log::AuditActor::subject(adk_core::SubjectRef::human(setup.user.clone()));
+    for partition in &settings.partitions {
+        match table.get(&partition.id).await? {
+            None => table.put(partition.clone(), by.clone()).await?,
+            Some(stored) if stored != *partition => println!(
+                "note: partition `{}` differs from its [[kernel.partitions]] entry; the \
+                 partition table's record applies (change it with `adk-rust partitions`)",
+                partition.id
+            ),
+            Some(_) => {}
+        }
+    }
+    Ok(table)
+}
+
+/// One harness per partition in the table, the coordinator's first: it serves the REPL,
+/// the web surface and the CLI's own targets (spec 3.2 §7.8).
+async fn partition_harnesses(
+    setup: &Setup,
+    settings: &KernelSettings,
+    table: &adk_kernel::Partitions,
+    service: &Arc<dyn ApprovalService>,
+    audit: Option<&Arc<dyn AuditRecorder>>,
+    governance: &GovernanceControl,
+    run_store: &Arc<dyn adk_core::DurableRunStore>,
+) -> Result<Vec<Hosted>> {
+    let mut partitions = table.list().await?;
+    let coordinator = settings.coordinator.as_ref();
+    partitions.sort_by_key(|partition| Some(&partition.id) != coordinator);
+    let mut hosted = Vec::with_capacity(partitions.len());
+    for partition in partitions {
+        let is_coordinator = coordinator == Some(&partition.id);
+        let agent = Arc::new(setup.agent_with(
+            setup.resolved.effort,
+            APP_NAME,
+            partition.default_mode.into(),
+            setup.resolved.sandbox,
+            None,
+            Some(service.clone()),
+            AgentExtras {
+                budget: None,
+                audit: audit.cloned(),
+                partition: Some((partition.clone(), table.clone(), is_coordinator)),
+            },
+        )?);
+        hosted.push(host(setup, agent, Some(&partition), governance, run_store)?);
+    }
+    Ok(hosted)
 }
 
 /// The kernel home when neither `--home` nor `[kernel] home` names one: the directory
@@ -229,12 +370,15 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
     if let Some(db) = &setup.db {
         let processes = adk_kernel::SqliteProcessStore::new(db.pool.clone());
         processes.migrate().await?;
+        let partitions = adk_kernel::SqlitePartitionStore::new(db.pool.clone());
+        partitions.migrate().await?;
         let schedules = adk_session::SqliteScheduleStore::from_pool(db.pool.clone());
         schedules.migrate().await?;
         let governance = adk_session::SqliteGovernanceStateStore::from_pool(db.pool.clone());
         governance.migrate().await?;
         return Ok(KernelStores {
             processes: Arc::new(processes),
+            partitions: Arc::new(partitions),
             schedules: Arc::new(schedules),
             governance: Some(Arc::new(governance)),
             label: "harness.db".into(),
@@ -243,6 +387,7 @@ async fn kernel_stores(setup: &Setup, store: Option<&str>) -> Result<KernelStore
     let _ = setup;
     Ok(KernelStores {
         processes: Arc::new(adk_kernel::InMemoryProcessStore::new()),
+        partitions: Arc::new(adk_kernel::InMemoryPartitionStore::new()),
         schedules: Arc::new(adk_core::InMemoryScheduleStore::new()),
         governance: None,
         label: "memory (--ephemeral): nothing outlives the kernel".into(),
@@ -257,12 +402,15 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
         Some("postgres" | "postgresql") => {
             let processes = adk_kernel::PostgresProcessStore::connect(url).await?;
             processes.migrate().await?;
+            let partitions = adk_kernel::PostgresPartitionStore::connect(url).await?;
+            partitions.migrate().await?;
             let schedules = adk_session::PostgresScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::PostgresGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
+                partitions: Arc::new(partitions),
                 schedules: Arc::new(schedules),
                 governance: Some(Arc::new(governance)),
                 label,
@@ -272,12 +420,15 @@ async fn shared_kernel_stores(url: &str) -> Result<KernelStores> {
         Some("redis" | "rediss") => {
             let processes = adk_kernel::RedisProcessStore::connect(url).await?;
             processes.migrate().await?;
+            let partitions = adk_kernel::RedisPartitionStore::connect(url).await?;
+            partitions.migrate().await?;
             let schedules = adk_session::RedisScheduleStore::new(url).await?;
             schedules.migrate().await?;
             let governance = adk_session::RedisGovernanceStateStore::new(url).await?;
             governance.migrate().await?;
             Ok(KernelStores {
                 processes: Arc::new(processes),
+                partitions: Arc::new(partitions),
                 schedules: Arc::new(schedules),
                 governance: Some(Arc::new(governance)),
                 label,

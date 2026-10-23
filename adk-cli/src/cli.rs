@@ -488,6 +488,13 @@ pub enum Commands {
         kernel: KernelTarget,
     },
 
+    /// The running kernel's partitions: list them, add one, or set one's mode
+    #[cfg(feature = "harness")]
+    Partitions {
+        #[command(subcommand)]
+        command: Option<PartitionsCommands>,
+    },
+
     /// Harness sessions kept in harness.db
     #[cfg(all(feature = "harness", feature = "persist"))]
     Sessions {
@@ -638,6 +645,58 @@ pub struct KernelTarget {
     /// Bearer token for --server (default: $ADK_SERVE_TOKEN)
     #[arg(long)]
     pub token: Option<String>,
+}
+
+/// `adk-rust partitions` (spec 3.2 §7.8, §8.1).
+#[cfg(feature = "harness")]
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub enum PartitionsCommands {
+    /// Every partition: its class, mode, memory scope, drivers, crossings and blocks
+    List {
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+    /// Add a partition, or replace one; its harness starts at the next `adk-rust up`
+    Add {
+        /// The partition id, such as work
+        id: String,
+        /// The class of its agents' principals (default: the id)
+        #[arg(long)]
+        class: Option<String>,
+        /// The tenant of its agents' principals
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Its mode: read_only, plan, ask or auto (default: ask)
+        #[arg(long, value_parser = parse_partition_mode)]
+        mode: Option<adk_kernel::PartitionMode>,
+        /// The project of its long-term facts (default: the id)
+        #[arg(long, value_name = "SCOPE")]
+        memory_scope: Option<String>,
+        /// A driver mounted for it; repeat for several
+        #[arg(long = "driver", value_name = "ID")]
+        drivers: Vec<String>,
+        /// Let the coordinator cross into and out of it, each crossing under approval
+        #[arg(long)]
+        coordinator_crossings: bool,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+    /// Set a partition's mode; its harness takes it at the next `adk-rust up`
+    SetMode {
+        /// The partition id
+        partition: String,
+        /// read_only, plan, ask or auto
+        #[arg(value_parser = parse_partition_mode)]
+        mode: adk_kernel::PartitionMode,
+        #[command(flatten)]
+        kernel: KernelTarget,
+    },
+}
+
+/// Parses a partition mode: `read_only`, `plan`, `ask` or `auto`.
+#[cfg(feature = "harness")]
+fn parse_partition_mode(value: &str) -> Result<adk_kernel::PartitionMode, String> {
+    value.parse().map_err(|error: adk_kernel::KernelError| error.to_string())
 }
 
 /// Parses a run state as the run store names it: `waiting`, `running`, ….

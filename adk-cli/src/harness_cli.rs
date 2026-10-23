@@ -75,11 +75,15 @@ struct Models {
 }
 
 /// What an `ultracode` implementer adds to a harness agent (spec 3.1 §7.10): its turn's
-/// `RunBudget` and the run's audit log.
+/// `RunBudget` and the run's audit log; and what `up` adds for a partition's harness (spec
+/// 3.2 §7.8).
 #[derive(Default)]
 struct AgentExtras {
     budget: Option<RunBudget>,
     audit: Option<Arc<dyn AuditRecorder>>,
+    /// The partition the harness runs, the table its policy reads, and whether it is the
+    /// coordinator.
+    partition: Option<(adk_kernel::Partition, adk_kernel::Partitions, bool)>,
 }
 
 /// Installs the process's tracing subscriber once, so a `warn!` or `error!` from the
@@ -275,8 +279,9 @@ impl Setup {
                 .shell_ledger(db.ledger.clone())
                 .approval_store(db.approvals.clone())
                 .goal_store(db.goals.clone());
-            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2).
-            if self.resolved.memory && approval_service.is_none() {
+            // Long-term memory in harness.db; off when served (spec 3.1 §7.15.2), except for
+            // a partition, whose memory scope is what keeps it apart (spec 3.2 §7.8).
+            if self.resolved.memory && (approval_service.is_none() || extras.partition.is_some()) {
                 builder = builder
                     .long_term_memory(adk_harness::LongTermMemoryConfig::default())
                     .fact_store(db.facts.clone());
@@ -365,6 +370,14 @@ impl Setup {
         }
         if let Some(recorder) = extras.audit {
             builder = builder.audit_log(recorder);
+        }
+        // A partition's harness: its mode, identity, memory scope and crossing policy (spec
+        // 3.2 §7.8).
+        if let Some((partition, table, coordinator)) = extras.partition {
+            builder = builder.partition(partition, table);
+            if coordinator {
+                builder = builder.partition_coordinator();
+            }
         }
         // Servers the workspace declares in `.mcp.json` start once the workspace is trusted
         // (spec 3.1 §7.21, I3).
@@ -1287,6 +1300,7 @@ pub async fn ultracode(
         AgentExtras {
             budget: Some(RunBudget::new().max_model_calls(limits.implement_model_calls)),
             audit: Some(recorder.clone()),
+            partition: None,
         },
     )?;
     let runtime = agent.runtime().clone();

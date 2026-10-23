@@ -195,6 +195,8 @@ async fn main() -> Result<()> {
             kernel_cli::act(&kernel, &pid, kernel_cli::Action::Resume).await
         }
         #[cfg(feature = "harness")]
+        Some(Commands::Partitions { command }) => kernel_cli::partitions(command).await,
+        #[cfg(feature = "harness")]
         Some(Commands::Freeze { reason, kernel }) => {
             kernel_cli::freeze(&kernel, reason.as_deref()).await
         }
