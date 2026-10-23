@@ -84,6 +84,8 @@ mod mode;
 #[cfg(feature = "observe")]
 mod observe;
 pub mod packs;
+#[cfg(feature = "kernel")]
+mod partition;
 #[cfg(feature = "graph")]
 mod plan_graph;
 mod policy;
@@ -197,6 +199,11 @@ pub use packs::payments::{PAYMENT_AUDIT_ACTION, PAYMENT_TOOL_NAMES, PaymentManda
 pub use packs::voice::{
     DecisionSource, SpokenDecision, VOICE_AUDIT_DECIDED, VOICE_AUDIT_HELD, VOICE_AUDIT_RESUMED,
     VoiceConfig, VoiceEvent, VoiceSurface, parse_spoken_decision,
+};
+#[cfg(feature = "kernel")]
+pub use partition::{
+    CrossingAnswer, CrossingPrompt, PARTITION_MEMORY_REMEMBER, PARTITION_MEMORY_SEARCH,
+    partition_target,
 };
 #[cfg(feature = "graph")]
 pub use plan_graph::{
