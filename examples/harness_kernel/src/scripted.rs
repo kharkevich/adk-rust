@@ -493,9 +493,8 @@ async fn k7_partitions() -> Result<Checks> {
             json!({ "partition": partition, "query": query }),
         )
     };
-    let get = |id: &str| table.get(&PartitionId::new(id));
-    let home_partition = get("home").await?.context("home")?;
-    let work_partition = get("work").await?.context("work")?;
+    let home_partition = table.get(&PartitionId::new("home")).await?.context("home")?;
+    let work_partition = table.get(&PartitionId::new("work")).await?.context("work")?;
     let coordinator = partition_harness(
         &stores,
         &workspace,
