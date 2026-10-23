@@ -173,6 +173,42 @@ impl Supervision {
         }
     }
 
+    /// Refuses a run of a partition agent's target that continues a session another
+    /// partition's agent ran, so no agent reads another partition's transcript (spec 3.2
+    /// K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) naming the other partition, or
+    /// the run store's error.
+    pub(crate) async fn check_session_partition(
+        &self,
+        run: &adk_core::NewRun,
+        partition: &PartitionId,
+    ) -> crate::error::Result<()> {
+        let Some(session) = &run.session_id else { return Ok(()) };
+        if self.partition_targets.is_empty() {
+            return Ok(());
+        }
+        let filter = adk_core::RunFilter::default()
+            .app_name(&run.app_name)
+            .user_id(&run.user_id)
+            .session_id(session);
+        for earlier in self.runs.list(filter).await? {
+            if let Some(other) = self.partition_targets.get(&earlier.target)
+                && other != partition
+            {
+                return Err(crate::error::KernelError::Config {
+                    reason: format!(
+                        "session `{session}` belongs to partition `{other}`; a process of \
+                         partition `{partition}` cannot continue it (spec 3.2 K-I15)"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// The stored side table of `run`, or `None`.
     pub(crate) async fn stored_meta(&self, run: &RunRecord) -> Option<ProcessMeta> {
         match self.processes.get(&run.run_id).await {

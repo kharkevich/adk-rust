@@ -64,6 +64,35 @@ async fn a_partition_agents_target_runs_only_its_partition() {
     );
 }
 
+/// K-I15: a partition agent's process cannot continue a session another partition's agent
+/// ran.
+#[tokio::test]
+async fn a_partition_agent_cannot_continue_another_partitions_session() {
+    let world = World::answer();
+    let control = GovernanceControl::new();
+    let (home, work) = (world.runner(&control), world.runner(&control));
+    let kernel = world.kernel_with("k1", &control, |builder| {
+        builder.partition_agent("home", "adk-rust@home", home).partition_agent(
+            "work",
+            WORK_TARGET,
+            work,
+        )
+    });
+    let in_session = |target: &str| {
+        NewRun::new(QueueClass::BACKGROUND, APP, "alice", target, json!({ "text": "x" }))
+            .with_session_id("s-home")
+    };
+    let spec = || ProcessSpec::new(ProcessKind::Interactive);
+    kernel.processes().spawn(in_session("adk-rust@home"), spec()).await.unwrap();
+    let refused = kernel.processes().spawn(in_session(WORK_TARGET), spec()).await.unwrap_err();
+    assert!(
+        matches!(&refused, KernelError::Config { reason } if reason.contains("belongs to partition `home`")),
+        "{refused}"
+    );
+    // The session's own partition continues it.
+    kernel.processes().spawn(in_session("adk-rust@home"), spec()).await.unwrap();
+}
+
 #[tokio::test]
 async fn the_kernel_shares_the_partition_table_and_writes_its_records_to_the_kernel_trail() {
     let world = World::answer();

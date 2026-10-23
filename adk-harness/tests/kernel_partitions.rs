@@ -181,6 +181,43 @@ async fn a_work_agents_read_of_a_home_fact_is_denied_at_the_policy() {
     assert!(records[0].ext["by"].as_str().unwrap().starts_with("urn:adk:agent:"));
 }
 
+/// Spec 3.1 §7.14, 3.2 §7.8: every agent of a partition's harness acts with the partition's
+/// class, through the runner's identity source, so a `PolicyRule::for_class` rule applies to
+/// one partition's agents and not another's.
+#[tokio::test]
+async fn class_rules_apply_to_the_partitions_agents() {
+    let mut world = World::new().await;
+    let policy = || -> Arc<dyn adk_core::ToolPolicy> {
+        Arc::new(
+            adk_core::DeclarativePolicy::builder()
+                .rule(
+                    adk_core::PolicyRule::deny("memory_search", "work agents do not search memory")
+                        .for_class("work-agents"),
+                )
+                .default_decision(adk_core::PolicyDecision::Allow)
+                .build(),
+        )
+    };
+    let script = |answer: &str| {
+        vec![
+            ScriptedResponse::function_call("memory_search", json!({ "query": "standup" })),
+            text(answer),
+        ]
+    };
+    let (work, _) =
+        world.harness("work", false, script("no"), |b| b.operator_policy(policy())).await;
+    let (home, _) =
+        world.harness("home", true, script("ok"), |b| b.operator_policy(policy())).await;
+    let denied = response_of(&send(&work, "w1", "search").await, "memory_search");
+    assert!(
+        denied["error"].as_str().unwrap_or_default().contains("work agents do not search"),
+        "{denied}"
+    );
+    let allowed = response_of(&send(&home, "h1", "search").await, "memory_search");
+    assert_eq!(outcome(&allowed), common::Outcome::Executed, "{allowed}");
+    assert_eq!(world.outcomes(), Vec::<String>::new(), "a partition's own memory is no crossing");
+}
+
 /// §13 Q3: the coordinator's second identical read in the same run is not asked again, a
 /// write in the same run is, and the next run asks again.
 #[tokio::test]

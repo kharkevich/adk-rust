@@ -816,7 +816,8 @@ impl ProcessTable {
     ///
     /// Returns [`KernelError::Frozen`] while the kernel is frozen,
     /// [`KernelError::Config`] when `run`'s target is a partition agent of a partition other
-    /// than `spec.partition` (spec 3.2 §7.8), the run store's error when `run` is invalid or
+    /// than `spec.partition`, or `run` continues a session another partition's agent ran
+    /// (spec 3.2 §7.8, K-I15), the run store's error when `run` is invalid or
     /// its concurrency key refuses it, or a store error. A spawn of a partition agent's target
     /// in the default partition runs in the target's partition.
     pub async fn spawn(&self, mut run: NewRun, mut spec: ProcessSpec) -> Result<Process> {
@@ -824,6 +825,7 @@ impl ProcessTable {
         // A partition agent's target runs only its own partition (spec 3.2 §7.8, K-I15).
         if let Some(sup) = &self.sup {
             spec.partition = sup.partition_for(&run.target, spec.partition)?;
+            sup.check_session_partition(&run, &spec.partition).await?;
         }
         let asleep = spec.wake.is_some();
         // The key carries the sleep intent to the claim, so a sleeper parks before its first
