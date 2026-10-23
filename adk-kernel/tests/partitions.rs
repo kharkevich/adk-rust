@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use adk_core::audit_log::{AuditActor, AuditTrail, InMemoryAuditRecorder};
 use adk_core::{
-    ActingContext, AgentPrincipal, Content, Memory, MemoryEntry, PolicyCall,
-    PolicyDecision, ToolConfirmationRequest, ToolOrigin, ToolPolicy, ToolPolicyRequest,
+    ActingContext, AgentPrincipal, Content, Memory, MemoryEntry, PolicyCall, PolicyDecision,
+    ToolConfirmationRequest, ToolOrigin, ToolPolicy, ToolPolicyRequest,
 };
 use adk_kernel::audit::{PARTITION_CHANGED, PARTITION_CREATED, PARTITION_CROSSING};
 use adk_kernel::{

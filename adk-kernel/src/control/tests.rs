@@ -240,6 +240,13 @@ impl ControlBackend for Fake {
         self.asked_after.lock().unwrap().push(after);
         Ok(self.bus.subscribe())
     }
+
+    async fn partitions(&self) -> Result<Vec<crate::partition::Partition>> {
+        Ok(vec![
+            crate::partition::Partition::new("home", "home"),
+            crate::partition::Partition::new("work", "work").with_driver("calendar"),
+        ])
+    }
 }
 
 /// Admits `Bearer right` as `phone`, an operator, and `Bearer viewer` as `viewer`, who is
@@ -485,6 +492,21 @@ async fn ps_nice_and_errors_round_trip() {
     let error = adk_core::AdkError::from(client.suspend("no-such-run").await.unwrap_err());
     assert_eq!((error.code, error.http_status_code()), (crate::error::NOT_FOUND_CODE, 404));
     assert!(error.message.contains("adk-rust ps"), "{}", error.message);
+    plane.shutdown().await.unwrap();
+}
+
+/// Spec 3.2 §7.8, §7.11: the partition table is read by any authenticated caller, without a
+/// control record.
+#[tokio::test]
+async fn partitions_are_listed_to_an_authenticated_caller() {
+    let fake = Fake::new();
+    let (plane, client) =
+        http_plane(&fake, ControlPlaneConfig::default().with_http(loopback())).await;
+    let partitions = client.partitions().await.unwrap();
+    let ids: Vec<&str> = partitions.iter().map(|partition| partition.id.as_str()).collect();
+    assert_eq!(ids, ["home", "work"]);
+    assert_eq!(partitions[1].drivers, ["calendar"]);
+    assert!(fake.recorder.records().is_empty(), "a read is not recorded");
     plane.shutdown().await.unwrap();
 }
 

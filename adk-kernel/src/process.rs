@@ -761,7 +761,7 @@ impl ProcessTable {
                     if rows.contains_key(&run.run_id) {
                         continue;
                     }
-                    let meta = Supervision::infer_meta(&run);
+                    let meta = sup.inferred_meta(&run);
                     if filter.matches(&meta) {
                         rows.insert(run.run_id.clone(), (run, meta));
                     }
@@ -814,10 +814,17 @@ impl ProcessTable {
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::Frozen`] while the kernel is frozen, the run store's error when
-    /// `run` is invalid or its concurrency key refuses it, or a store error.
-    pub async fn spawn(&self, mut run: NewRun, spec: ProcessSpec) -> Result<Process> {
+    /// Returns [`KernelError::Frozen`] while the kernel is frozen,
+    /// [`KernelError::Config`] when `run`'s target is a partition agent of a partition other
+    /// than `spec.partition` (spec 3.2 §7.8), the run store's error when `run` is invalid or
+    /// its concurrency key refuses it, or a store error. A spawn of a partition agent's target
+    /// in the default partition runs in the target's partition.
+    pub async fn spawn(&self, mut run: NewRun, mut spec: ProcessSpec) -> Result<Process> {
         self.refuse_while_frozen()?;
+        // A partition agent's target runs only its own partition (spec 3.2 §7.8, K-I15).
+        if let Some(sup) = &self.sup {
+            spec.partition = sup.partition_for(&run.target, spec.partition)?;
+        }
         let asleep = spec.wake.is_some();
         // The key carries the sleep intent to the claim, so a sleeper parks before its first
         // model call however long its row below takes to write; the caller's key follows
@@ -1121,7 +1128,11 @@ impl ProcessTable {
 
     /// The stored side table of `run`, or the inferred one when nothing recorded it.
     async fn meta(&self, run: &RunRecord) -> Result<ProcessMeta> {
-        Ok(self.processes.get(&run.run_id).await?.unwrap_or_else(|| Supervision::infer_meta(run)))
+        let inferred = || match &self.sup {
+            Some(sup) => sup.inferred_meta(run),
+            None => Supervision::infer_meta(run),
+        };
+        Ok(self.processes.get(&run.run_id).await?.unwrap_or_else(inferred))
     }
 
     /// The live view of one process (spec 3.2 §7.3, §7.10). A part a store cannot answer is

@@ -20,13 +20,14 @@
 //! | `GET /kernel/events` | the event bus as server-sent events, from a cursor ([`api::EventsQuery`]) |
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
+//! | `GET /kernel/partitions` | the partition table ([`api::PartitionsResponse`], spec 3.2 §7.8) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
 //! [`Kernel::freeze`] through the kernel's `FreezeDelegate` (§10 S4). The socket serves the
 //! approvals inbox beside the kernel routes when the kernel has an approval service, so a
-//! held call is decided over the socket as over HTTP. Agenda, driver, partition and `/proc`
-//! routes arrive with their phases.
+//! held call is decided over the socket as over HTTP. Agenda, driver and `/proc` routes
+//! arrive with their phases.
 //!
 //! # Authentication and audit
 //!
@@ -50,7 +51,8 @@
 //! acts (K-I16; `spawn` records the new `pid` once it exists and cancels the process when
 //! the record fails), and is refused when the record cannot be written under
 //! `AuditFailureMode::Block`, except `freeze`, which takes effect regardless. Reads of the
-//! process table, the health and the event stream are authenticated and not recorded.
+//! process table, the partition table, the health and the event stream are authenticated
+//! and not recorded.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -104,6 +106,8 @@ pub mod paths {
     pub const FREEZE: &str = "/kernel/freeze";
     /// `POST`: lift the freeze.
     pub const UNFREEZE: &str = "/kernel/unfreeze";
+    /// `GET`: the partition table (spec 3.2 §7.8).
+    pub const PARTITIONS: &str = "/kernel/partitions";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).

@@ -24,13 +24,15 @@ use serde_json::json;
 
 use super::api::{
     AttachRequest, AttachResponse, EventsQuery, FreezeRequest, FreezeResponse, KillRequest,
-    NiceRequest, ProcessResponse, ProcessesQuery, ProcessesResponse, SpawnRequest,
+    NiceRequest, PartitionsResponse, ProcessResponse, ProcessesQuery, ProcessesResponse,
+    SpawnRequest,
 };
 use super::{ControlTransport, paths};
 use crate::audit;
 use crate::bus::EventSubscriber;
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
 use crate::kernel::{Kernel, KernelHealth};
+use crate::partition::Partition;
 use crate::process::{Process, ProcessKind, ProcessSpec};
 use crate::sched::QueueClass;
 use crate::stores::ProcessFilter;
@@ -65,6 +67,10 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     async fn unfreeze(&self, by: AuditActor) -> Result<()>;
     /// The bus from just after `after`, or from now on.
     async fn events(&self, after: Option<u64>) -> Result<EventSubscriber>;
+    /// The partition table, ordered by id (spec 3.2 §7.8).
+    async fn partitions(&self) -> Result<Vec<Partition>> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]
@@ -148,6 +154,10 @@ impl ControlBackend for Kernel {
             None => Ok(Kernel::events(self)),
         }
     }
+
+    async fn partitions(&self) -> Result<Vec<Partition>> {
+        Kernel::partitions(self).list().await
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -163,6 +173,7 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::ATTACH, post(attach))
         .route(paths::FREEZE, post(freeze))
         .route(paths::UNFREEZE, post(unfreeze))
+        .route(paths::PARTITIONS, get(partitions))
         .with_state(backend)
 }
 
@@ -525,4 +536,8 @@ async fn unfreeze(State(backend): Backend, caller: Caller) -> Result<Json<Freeze
         parked_runs: None,
         audit_error: None,
     }))
+}
+
+async fn partitions(State(backend): Backend, _caller: Caller) -> Result<Json<PartitionsResponse>> {
+    Ok(Json(PartitionsResponse { partitions: backend.partitions().await? }))
 }

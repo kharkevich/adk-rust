@@ -129,6 +129,18 @@ impl ControlClient {
         self.call(Method::GET, paths::HEALTH.to_string(), None::<&()>).await
     }
 
+    /// `GET /kernel/partitions`: the partition table (spec 3.2 §7.8).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::ControlPlane`] when the kernel cannot be reached, or the
+    /// error the kernel answered.
+    pub async fn partitions(&self) -> Result<Vec<crate::partition::Partition>> {
+        let answer: super::api::PartitionsResponse =
+            self.call(Method::GET, paths::PARTITIONS.to_string(), None::<&()>).await?;
+        Ok(answer.partitions)
+    }
+
     /// `GET /kernel/processes`.
     ///
     /// # Errors

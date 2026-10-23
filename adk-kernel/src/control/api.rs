@@ -283,3 +283,11 @@ pub struct ApprovalItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
 }
+
+/// `GET /kernel/partitions` answer (spec 3.2 §7.8, §7.11).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionsResponse {
+    /// Every partition, ordered by id.
+    pub partitions: Vec<crate::partition::Partition>,
+}

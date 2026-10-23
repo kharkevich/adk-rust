@@ -94,6 +94,9 @@ pub(crate) struct Supervision {
     pub(crate) watched: Mutex<BTreeMap<PathBuf, tokio::task::JoinHandle<()>>>,
     /// The kernel's clock ([`KernelConfig::clock`](crate::KernelConfig::clock)).
     pub(crate) clock: Arc<dyn Clock>,
+    /// The partition each partition agent's target runs (spec 3.2 §7.8,
+    /// [`KernelBuilder::partition_agent`](crate::KernelBuilder::partition_agent)).
+    pub(crate) partition_targets: BTreeMap<String, PartitionId>,
 }
 
 impl std::fmt::Debug for Supervision {
@@ -130,6 +133,44 @@ impl Supervision {
             ProcessKind::Interactive
         };
         ProcessMeta::new(run.run_id.clone(), QueueClass::from_name(&run.queue), kind)
+    }
+
+    /// [`infer_meta`](Self::infer_meta) in the partition `run`'s target is bound to (spec
+    /// 3.2 §7.8).
+    pub(crate) fn inferred_meta(&self, run: &RunRecord) -> ProcessMeta {
+        let mut meta = Self::infer_meta(run);
+        if let Some(partition) = self.partition_targets.get(&run.target) {
+            meta.partition = partition.clone();
+        }
+        meta
+    }
+
+    /// The partition a process of `target` runs in when `asked` is requested: the target's
+    /// partition when it is bound to one and `asked` is it or the default, `asked` for a
+    /// target bound to none (spec 3.2 §7.8, K-I15).
+    ///
+    /// # Errors
+    ///
+    /// [`KernelError::Config`](crate::KernelError::Config) when `target` runs another
+    /// partition's agent.
+    pub(crate) fn partition_for(
+        &self,
+        target: &str,
+        asked: PartitionId,
+    ) -> crate::error::Result<PartitionId> {
+        match self.partition_targets.get(target) {
+            None => Ok(asked),
+            Some(bound) if *bound == asked || asked.as_str() == PartitionId::DEFAULT => {
+                Ok(bound.clone())
+            }
+            Some(bound) => Err(crate::error::KernelError::Config {
+                reason: format!(
+                    "target `{target}` runs the agent of partition `{bound}`, so a process of \
+                     partition `{asked}` cannot run it; spawn it with that partition's target \
+                     (spec 3.2 K-I15)"
+                ),
+            }),
+        }
     }
 
     /// The stored side table of `run`, or `None`.
@@ -516,7 +557,7 @@ impl WorkerHooks for KernelHooks {
         let sup = &self.sup;
         let stored = sup.stored_meta(run).await;
         let persisted = stored.is_some();
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let from = if meta.wake.is_some() || meta.suspended_by.is_some() || run.attempt > 1 {
             RunState::Waiting
         } else {
@@ -577,7 +618,7 @@ impl WorkerHooks for KernelHooks {
             });
             return;
         }
-        let mut meta = stored.unwrap_or_else(|| Supervision::infer_meta(run));
+        let mut meta = stored.unwrap_or_else(|| sup.inferred_meta(run));
         let draining = sup.draining.load(Ordering::SeqCst);
         let label = match reason {
             ParkReason::Suspended => {
