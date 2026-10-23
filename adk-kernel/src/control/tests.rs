@@ -247,6 +247,23 @@ impl ControlBackend for Fake {
             crate::partition::Partition::new("work", "work").with_driver("calendar"),
         ])
     }
+
+    async fn put_partition(
+        &self,
+        partition: crate::partition::Partition,
+        _by: AuditActor,
+    ) -> Result<crate::partition::Partition> {
+        Ok(partition)
+    }
+
+    async fn set_partition_mode(
+        &self,
+        id: crate::partition::PartitionId,
+        mode: crate::partition::PartitionMode,
+        _by: AuditActor,
+    ) -> Result<crate::partition::Partition> {
+        Ok(crate::partition::Partition::new(id, "class").with_mode(mode))
+    }
 }
 
 /// Admits `Bearer right` as `phone`, an operator, and `Bearer viewer` as `viewer`, who is
@@ -507,6 +524,21 @@ async fn partitions_are_listed_to_an_authenticated_caller() {
     assert_eq!(ids, ["home", "work"]);
     assert_eq!(partitions[1].drivers, ["calendar"]);
     assert!(fake.recorder.records().is_empty(), "a read is not recorded");
+
+    // The writes need the operator scope, which a loopback bind grants, and are recorded.
+    let put =
+        client.put_partition(&crate::partition::Partition::new("team", "team")).await.unwrap();
+    assert_eq!(put.id.as_str(), "team");
+    let moded =
+        client.set_partition_mode("work", crate::partition::PartitionMode::Auto).await.unwrap();
+    assert_eq!(moded.default_mode, crate::partition::PartitionMode::Auto);
+    let actions: Vec<String> = fake
+        .recorder
+        .records()
+        .iter()
+        .map(|record| record.ext["action"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(actions, ["partition.put", "partition.mode"]);
     plane.shutdown().await.unwrap();
 }
 

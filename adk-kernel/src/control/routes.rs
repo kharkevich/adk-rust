@@ -24,15 +24,15 @@ use serde_json::json;
 
 use super::api::{
     AttachRequest, AttachResponse, EventsQuery, FreezeRequest, FreezeResponse, KillRequest,
-    NiceRequest, PartitionsResponse, ProcessResponse, ProcessesQuery, ProcessesResponse,
-    SpawnRequest,
+    NiceRequest, PartitionModeRequest, PartitionResponse, PartitionsResponse, ProcessResponse,
+    ProcessesQuery, ProcessesResponse, SpawnRequest,
 };
 use super::{ControlTransport, paths};
 use crate::audit;
 use crate::bus::EventSubscriber;
 use crate::error::{KernelError, Result, UNAUTHORIZED_CODE};
 use crate::kernel::{Kernel, KernelHealth};
-use crate::partition::Partition;
+use crate::partition::{Partition, PartitionId, PartitionMode};
 use crate::process::{Process, ProcessKind, ProcessSpec};
 use crate::sched::QueueClass;
 use crate::stores::ProcessFilter;
@@ -70,6 +70,21 @@ pub(crate) trait ControlBackend: Send + Sync + 'static {
     /// The partition table, ordered by id (spec 3.2 §7.8).
     async fn partitions(&self) -> Result<Vec<Partition>> {
         Ok(Vec::new())
+    }
+    /// Creates or replaces `partition` (spec 3.2 §7.8).
+    async fn put_partition(&self, partition: Partition, by: AuditActor) -> Result<Partition> {
+        let _ = (partition, by);
+        Err(KernelError::Config { reason: "this kernel keeps no partition table".into() })
+    }
+    /// Sets the mode of partition `id` (spec 3.2 §7.8).
+    async fn set_partition_mode(
+        &self,
+        id: PartitionId,
+        mode: PartitionMode,
+        by: AuditActor,
+    ) -> Result<Partition> {
+        let _ = (id, mode, by);
+        Err(KernelError::Config { reason: "this kernel keeps no partition table".into() })
     }
 }
 
@@ -158,6 +173,20 @@ impl ControlBackend for Kernel {
     async fn partitions(&self) -> Result<Vec<Partition>> {
         Kernel::partitions(self).list().await
     }
+
+    async fn put_partition(&self, partition: Partition, by: AuditActor) -> Result<Partition> {
+        Kernel::partitions(self).put(partition.clone(), by).await?;
+        Ok(partition)
+    }
+
+    async fn set_partition_mode(
+        &self,
+        id: PartitionId,
+        mode: PartitionMode,
+        by: AuditActor,
+    ) -> Result<Partition> {
+        Kernel::partitions(self).set_mode(id, mode, by).await
+    }
 }
 
 /// The routes over `backend`, relative to `/api`.
@@ -173,7 +202,8 @@ pub(crate) fn routes(backend: Arc<dyn ControlBackend>) -> Router {
         .route(paths::ATTACH, post(attach))
         .route(paths::FREEZE, post(freeze))
         .route(paths::UNFREEZE, post(unfreeze))
-        .route(paths::PARTITIONS, get(partitions))
+        .route(paths::PARTITIONS, get(partitions).post(put_partition))
+        .route(paths::PARTITION_MODE, post(set_partition_mode))
         .with_state(backend)
 }
 
@@ -540,4 +570,28 @@ async fn unfreeze(State(backend): Backend, caller: Caller) -> Result<Json<Freeze
 
 async fn partitions(State(backend): Backend, _caller: Caller) -> Result<Json<PartitionsResponse>> {
     Ok(Json(PartitionsResponse { partitions: backend.partitions().await? }))
+}
+
+async fn put_partition(
+    State(backend): Backend,
+    caller: Caller,
+    Json(partition): Json<Partition>,
+) -> Result<Json<PartitionResponse>> {
+    caller.require_operator("change partitions")?;
+    record(backend.as_ref(), &caller, "partition.put", Some(partition.id.as_str()), &[]).await?;
+    let partition = backend.put_partition(partition, caller.actor()).await?;
+    Ok(Json(PartitionResponse { partition }))
+}
+
+async fn set_partition_mode(
+    State(backend): Backend,
+    caller: Caller,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<PartitionModeRequest>,
+) -> Result<Json<PartitionResponse>> {
+    caller.require_operator("change partitions")?;
+    record(backend.as_ref(), &caller, "partition.mode", Some(&id), &[]).await?;
+    let partition =
+        backend.set_partition_mode(PartitionId::new(id), request.mode, caller.actor()).await?;
+    Ok(Json(PartitionResponse { partition }))
 }

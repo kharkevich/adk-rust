@@ -660,6 +660,40 @@ mod tests {
         assert!(matches!(admitted, Admitted::Rejected { .. }), "{admitted:?}");
     }
 
+    #[test]
+    fn each_partition_keeps_working_notes_of_its_own() {
+        let partitions = adk_kernel::Partitions::in_memory();
+        let wiring = |id: &str| super::PartitionWiring {
+            partition: adk_kernel::Partition::new(id, id),
+            policy: partitions.policy(id),
+        };
+        let workspace = std::path::Path::new("/work/repo");
+        let per_user = crate::memory::MemoryConfig {
+            layout: crate::memory::MemoryLayout::PerUser { base: "/m".into() },
+            ..crate::memory::MemoryConfig::default()
+        };
+        let roots: Vec<_> = ["home", "work", "a b/c"]
+            .iter()
+            .map(|id| {
+                wiring(id)
+                    .scope_notes(per_user.clone(), workspace)
+                    .root_for("app", "alice", workspace)
+            })
+            .collect();
+        assert!(roots[0].starts_with("/m/partitions/home"), "{:?}", roots[0]);
+        assert!(roots[1].starts_with("/m/partitions/work"), "{:?}", roots[1]);
+        assert_ne!(roots[0], roots[1]);
+        let digest = roots[2].strip_prefix("/m/partitions").unwrap().components().next().unwrap();
+        assert_eq!(digest.as_os_str().len(), 64, "a scope that is not a plain name is digested");
+        let project = crate::memory::MemoryConfig {
+            layout: crate::memory::MemoryLayout::Project,
+            ..crate::memory::MemoryConfig::default()
+        };
+        let root =
+            wiring("home").scope_notes(project, workspace).root_for("app", "alice", workspace);
+        assert!(root.starts_with("/work/repo/.adk/memory/partitions/home"), "{root:?}");
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
 

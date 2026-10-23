@@ -21,6 +21,7 @@
 //! | `POST /kernel/attach/{session}` | a surface attaches to a session: transcript cursor, pending holds, process |
 //! | `POST /kernel/freeze`, `POST /kernel/unfreeze` | [`Kernel::freeze`] and [`Kernel::unfreeze`] |
 //! | `GET /kernel/partitions` | the partition table ([`api::PartitionsResponse`], spec 3.2 §7.8) |
+//! | `POST /kernel/partitions`, `POST /kernel/partitions/{id}/mode` | create or replace a partition; set its mode ([`api::PartitionModeRequest`]) |
 //!
 //! The approvals inbox, `/api/runs`, `/api/cron`, `/api/admin/freeze` and `/hooks/{name}`
 //! are the existing server routes, unchanged; `POST /api/admin/freeze` delegates to
@@ -43,7 +44,7 @@
 //! | [`ControlPlaneConfig::http`] beyond loopback without one | Refused at start (K-I18) |
 //!
 //! The routes that change the kernel — `spawn`, `kill`, `nice`, `suspend`, `resume`,
-//! `freeze`, `unfreeze` — need the `operator` scope (`403` otherwise), which the socket and a
+//! `freeze`, `unfreeze`, and the partition writes — need the `operator` scope (`403` otherwise), which the socket and a
 //! loopback bind grant. `attach` reads only the caller's own sessions.
 //!
 //! Every action that changes the kernel or reads a session writes a `kernel.control` record
@@ -106,8 +107,10 @@ pub mod paths {
     pub const FREEZE: &str = "/kernel/freeze";
     /// `POST`: lift the freeze.
     pub const UNFREEZE: &str = "/kernel/unfreeze";
-    /// `GET`: the partition table (spec 3.2 §7.8).
+    /// `GET`: the partition table; `POST`: create or replace a partition (spec 3.2 §7.8).
     pub const PARTITIONS: &str = "/kernel/partitions";
+    /// `POST`: set a partition's mode (spec 3.2 §7.8, §8.1 `partitions set-mode`).
+    pub const PARTITION_MODE: &str = "/kernel/partitions/{id}/mode";
 }
 
 /// Where the control plane listens and how it authenticates HTTP callers (spec 3.2 §7.11).
