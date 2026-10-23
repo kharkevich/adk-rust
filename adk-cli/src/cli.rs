@@ -493,6 +493,9 @@ pub enum Commands {
     Partitions {
         #[command(subcommand)]
         command: Option<PartitionsCommands>,
+        /// The kernel to list, when no subcommand is given
+        #[command(flatten)]
+        kernel: KernelTarget,
     },
 
     /// Harness sessions kept in harness.db
@@ -1399,6 +1402,61 @@ mod tests {
             ChatArgs { ephemeral: true, ..ChatArgs::default() }
         );
         assert!(parse(&["adk-rust"]).command.is_none());
+    }
+
+    /// Spec 3.2 §8.1: `adk-rust partitions [list|add|set-mode P MODE]`.
+    #[cfg(feature = "harness")]
+    #[test]
+    fn partitions_parse_with_and_without_a_subcommand() {
+        let target =
+            |home: &str| KernelTarget { home: Some(home.into()), ..KernelTarget::default() };
+        match parse(&["adk-rust", "partitions", "--home", "/k"]).command {
+            Some(Commands::Partitions { command: None, kernel }) => {
+                assert_eq!(kernel, target("/k"))
+            }
+            _ => panic!("not the partitions command"),
+        }
+        match parse(&["adk-rust", "partitions", "set-mode", "work", "read-only", "--home", "/k"])
+            .command
+        {
+            Some(Commands::Partitions { command: Some(command), .. }) => assert_eq!(
+                command,
+                PartitionsCommands::SetMode {
+                    partition: "work".into(),
+                    mode: adk_kernel::PartitionMode::ReadOnly,
+                    kernel: target("/k"),
+                }
+            ),
+            _ => panic!("not the partitions command"),
+        }
+        match parse(&[
+            "adk-rust",
+            "partitions",
+            "add",
+            "team",
+            "--driver",
+            "a",
+            "--driver",
+            "b",
+            "--coordinator-crossings",
+        ])
+        .command
+        {
+            Some(Commands::Partitions {
+                command: Some(PartitionsCommands::Add { id, drivers, coordinator_crossings, .. }),
+                ..
+            }) => {
+                assert_eq!(
+                    (id.as_str(), drivers, coordinator_crossings),
+                    ("team", vec!["a".to_string(), "b".to_string()], true)
+                );
+            }
+            _ => panic!("not the partitions command"),
+        }
+        assert!(
+            Cli::try_parse_from(["adk-rust", "partitions", "set-mode", "work", "sometimes"])
+                .is_err()
+        );
     }
 
     #[test]

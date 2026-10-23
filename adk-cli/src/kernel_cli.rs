@@ -95,8 +95,8 @@ pub async fn ps(
 /// `adk-rust partitions [list|add|set-mode P MODE]` (spec 3.2 §7.8, §8.1). A change is
 /// recorded in the kernel's partition table at once; the partition's harness takes it at
 /// the next `adk-rust up`, which builds one harness per partition.
-pub async fn partitions(command: Option<PartitionsCommands>) -> Result<()> {
-    let command = command.unwrap_or(PartitionsCommands::List { kernel: KernelTarget::default() });
+pub async fn partitions(command: Option<PartitionsCommands>, kernel: KernelTarget) -> Result<()> {
+    let command = command.unwrap_or(PartitionsCommands::List { kernel });
     match command {
         PartitionsCommands::List { kernel } => {
             let partitions = client(&kernel).await?.partitions().await?;
