@@ -25,5 +25,14 @@
     or continue their sessions. `GET`/`POST /api/kernel/partitions` and
     `POST /api/kernel/partitions/{id}/mode`, with `ControlClient::{partitions, put_partition,
     set_partition_mode}`.
+  - Approved reads are kept per run (`CrossingRun`) apart from the append-only ledger: a
+    durable run's in the `PartitionStore`, released when the kernel's worker finishes it; an
+    invocation's in memory, released when it ends. A driver tool reused as a read must also
+    declare itself read-only, so `Financial` and `PublishPublic` calls are never reused.
+  - `adk-rust up` with `[[kernel.partitions]]` and `coordinator` in the user config runs one
+    harness per partition (`adk-rust@<partition>`), with long-term memory on for partitions;
+    `adk-rust partitions [list|add|set-mode P MODE]` lists and changes the table (`adk-cli`).
+  - `examples/harness_kernel`: K7 scripted (`k7_partitions`) and live through `adk-rust up`
+    (`live_k7_partitions`).
   - `PolicyCall::durable_run_id` (`adk-core`): the governed path tells a policy which durable
     run a call belongs to.

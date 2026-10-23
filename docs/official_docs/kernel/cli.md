@@ -16,6 +16,7 @@ own (spec 3.2 §8.1, K-I17).
 | `adk-rust freeze [--reason R]` / `unfreeze` | The kill switch, on every replica |
 | `adk-rust events [--follow] [--after CURSOR] [--json]` | The event bus |
 | `adk-rust goal TEXT --until CMD` | With a kernel running, enqueues the goal on its `background` queue and follows it |
+| `adk-rust partitions [list\|add ID\|set-mode P MODE]` | The kernel's [partitions](partitions.md) |
 
 `PID` is a process id or a unique prefix of one.
 
@@ -92,8 +93,52 @@ max_concurrent_runs = 4
 | `home` | Applies | Ignored, with a note |
 | `bind` | Applies | Ignored, with a note |
 | `max_concurrent_runs` | Applies to each queue's worker | Applies only when lower |
+| `[[kernel.partitions]]`, `coordinator` | The partitions `up` runs, and the one whose harness is the coordinator | Ignored, with a note |
 
 Flags win over both files. Unknown keys are reported and ignored.
+
+### Partitions
+
+With `[[kernel.partitions]]` entries, `up` runs one harness per [partition](partitions.md):
+each in the partition's mode, its agents with the partition's class and tenant, its long-term
+facts in the partition's memory scope (long-term memory is on for partitions under `up`, unless
+`--no-memory`), and every request into another partition denied unless the coordinator makes
+it, under approval.
+
+```toml
+[kernel]
+coordinator = "home"
+
+[[kernel.partitions]]
+id = "home"
+class = "home-agents"
+mode = "ask"
+cross_partition = "coordinator_with_approval"
+
+[[kernel.partitions]]
+id = "work"
+class = "work-agents"
+mode = "auto"
+memory_scope = "work"
+drivers = ["calendar"]
+cross_partition = "coordinator_with_approval"
+```
+
+| Key of an entry | Default |
+|---|---|
+| `id` | — |
+| `class` | the id |
+| `tenant` | none |
+| `mode` | `ask` |
+| `memory_scope` | the id |
+| `drivers` | none |
+| `cross_partition` | `deny` |
+
+At start, `up` adds each entry the partition table lacks; an entry the table already holds
+keeps the table's record, which `adk-rust partitions` changes, and `up` notes the difference.
+Each partition's harness runs as the targets `adk-rust@<partition>` and
+`harness.goal@<partition>`; the coordinator's also runs `adk-rust` and `harness.goal`, so
+`attach`, `goal` and `/api/runs` reach it.
 
 ## `adk-rust attach` and the REPL on a kernel
 
@@ -153,6 +198,26 @@ own, then follows it:
 | Ctrl-C | `0`; the goal keeps running on the kernel |
 
 `--resume` and `--ephemeral` run the goal in this process, as without a kernel.
+
+## `adk-rust partitions`
+
+```text
+$ adk-rust partitions
+ID           CLASS          MODE       MEMORY         DRIVERS              CROSSINGS                  BLOCKED
+home         home-agents    ask        home           -                    coordinator_with_approval  -
+work         work-agents    auto       work           calendar             coordinator_with_approval  -
+$ adk-rust partitions set-mode work ask
+$ adk-rust partitions add team --driver tracker --coordinator-crossings
+```
+
+| Subcommand | Does |
+|---|---|
+| `list` (the default) | The partition table |
+| `add ID [--class C] [--tenant T] [--mode M] [--memory-scope S] [--driver D]… [--coordinator-crossings]` | Adds a partition, or replaces one; its harness starts at the next `up` |
+| `set-mode P MODE` | Sets a partition's mode: `read_only`, `plan`, `ask` or `auto`; its harness takes it at the next `up` |
+
+`add` and `set-mode` need the `operator` scope and are recorded as `kernel.control` and
+`kernel.partition.created` or `kernel.partition.changed`.
 
 ## `adk-rust events`
 

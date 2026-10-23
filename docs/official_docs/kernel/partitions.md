@@ -115,6 +115,12 @@ What the builder sets for the partition:
 > **Note:** `Harness::with_runner` takes a runner you built. Give it the partition's identity
 > source yourself: `Runner::builder().identity_source(partition.identity_source("adk-rust", "harness"))`.
 
+## Partitions under `adk-rust up`
+
+`[[kernel.partitions]]` in the user config makes `adk-rust up` run one harness per partition,
+and `adk-rust partitions` lists and changes the table; see
+[kernel commands](cli.md#partitions).
+
 ## Hosting partitions on a kernel
 
 `Harness::kernel` on a partition's harness registers its runner as the targets
