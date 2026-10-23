@@ -207,6 +207,15 @@ arguments is refused, since a crossing runs as asked or not at all. Under a kern
 terminal, the crossing waits in the approvals inbox with the same answers in its reason; a
 decision wakes the process.
 
+### Recurring crossings
+
+A crossing that keeps happening says the resource sits in the wrong partition.
+`Partitions::recurring_crossings(since, at_least)` counts each request once — held, denied, or
+let through by its run's approval — by source, target, resource and name, and phrases the
+remedy as partition membership: move the resource, or merge the partitions, never a waiver
+("partition home crossed into work › calendar 14 times; if it needs it this often, move
+calendar into home, or merge home and work").
+
 ## Audit records
 
 | Action | When | Fields |

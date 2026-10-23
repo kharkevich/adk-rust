@@ -318,6 +318,7 @@ jobs:
         --features postgres,redis
         --run-ignored only --no-fail-fast
         --test process_store_redis
+        --test partition_store_redis
 
   # ── Docs: documentation coverage for Stable-tier crates ──────
   docs:

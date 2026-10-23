@@ -38,6 +38,7 @@ mod crossing;
 pub use crossing::{
     CROSSING_PARTITION_ARG, Crossing, CrossingAccess, CrossingFilter, CrossingOutcome,
     CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool, PartitionPolicy,
+    RecurringCrossing,
 };
 
 /// Names a partition: `work`, `home`, a team (spec 3.2 §7.8).
@@ -1026,6 +1027,43 @@ impl Partitions {
             }
         }
         Ok(())
+    }
+
+    /// The crossings since `since` that recur at least `at_least` times, by source, target,
+    /// resource and name, most frequent first (spec 3.2 §7.8): what the maintenance process
+    /// reports, with partition membership as the remedy. A request counts once: held, denied,
+    /// or let through by its run's approval; the approval of a held request is not counted
+    /// again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the store's error.
+    pub async fn recurring_crossings(
+        &self,
+        since: chrono::DateTime<chrono::Utc>,
+        at_least: usize,
+    ) -> Result<Vec<RecurringCrossing>> {
+        let filter = CrossingFilter::default().since(since).outcomes([
+            CrossingOutcome::Held,
+            CrossingOutcome::Denied,
+            CrossingOutcome::RunGrant,
+        ]);
+        let mut counts: std::collections::BTreeMap<
+            (PartitionId, PartitionId, CrossingResource, String),
+            usize,
+        > = std::collections::BTreeMap::new();
+        for record in self.inner.store.crossings(&filter).await? {
+            *counts.entry((record.from, record.to, record.resource, record.name)).or_default() += 1;
+        }
+        let mut recurring: Vec<RecurringCrossing> = counts
+            .into_iter()
+            .filter(|(_, count)| *count >= at_least)
+            .map(|((from, to, resource, name), count)| {
+                RecurringCrossing::new(from, to, resource, name, count)
+            })
+            .collect();
+        recurring.sort_by(|a, b| b.count.cmp(&a.count));
+        Ok(recurring)
     }
 
     /// Records a decision the policy made about a crossing, once per call and outcome.

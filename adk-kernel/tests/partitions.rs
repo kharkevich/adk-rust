@@ -344,6 +344,52 @@ async fn writes_and_acting_driver_calls_are_never_reusable_grants() {
     assert!(matches!(decide(&policy, &call, "c2").await, PolicyDecision::RequireApproval { .. }));
 }
 
+/// The maintenance process's report of recurring crossings: each request counts once, and
+/// the remedy is partition membership.
+#[tokio::test]
+async fn recurring_crossings_are_counted_once_per_request() {
+    let Setup { partitions, .. } = setup().await;
+    let policy = policy(&partitions, "home", true);
+    let before = chrono::Utc::now() - chrono::Duration::seconds(1);
+    for (call, invocation) in [("c1", "inv-1"), ("c2", "inv-2"), ("c3", "inv-3")] {
+        let read = read_work(invocation);
+        decide(&policy, &read, call).await;
+        let (crossing, fingerprint) = crossing_of(&policy, &read);
+        let run = CrossingRun::Invocation(invocation.into());
+        partitions.executed(&crossing, &fingerprint, &run, "agent", SEARCH).await.unwrap();
+        // The identical read again in the same run.
+        decide(&policy, &read, &format!("{call}-again")).await;
+    }
+    let work_agent = work_policy(&partitions);
+    decide(
+        &work_agent,
+        &request(SEARCH, json!({ "partition": "home", "query": "x" }), "inv-9"),
+        "c9",
+    )
+    .await;
+
+    let recurring = partitions.recurring_crossings(before, 2).await.unwrap();
+    assert_eq!(recurring.len(), 1, "{recurring:?}");
+    assert_eq!(
+        (recurring[0].from.as_str(), recurring[0].to.as_str(), recurring[0].count),
+        ("home", "work", 6),
+        "three held requests and three let through by their run's approval"
+    );
+    assert!(recurring[0].remedy().contains("never waived"));
+    assert_eq!(partitions.recurring_crossings(before, 1).await.unwrap().len(), 2);
+    assert!(
+        partitions
+            .recurring_crossings(chrono::Utc::now() + chrono::Duration::hours(1), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn work_policy(partitions: &Partitions) -> PartitionPolicy {
+    policy(partitions, "work", false)
+}
+
 /// The crossing fingerprint extends the call's fingerprint with the target partition and
 /// the resource class.
 #[test]

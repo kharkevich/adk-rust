@@ -101,6 +101,7 @@ pub use partition::{
     CROSSING_PARTITION_ARG, CrossPartition, Crossing, CrossingAccess, CrossingFilter,
     CrossingOutcome, CrossingRecord, CrossingResource, CrossingRoute, CrossingRun, CrossingTool,
     Partition, PartitionId, PartitionMode, PartitionPolicy, PartitionStore, Partitions,
+    RecurringCrossing,
 };
 pub use process::{
     GoalProgress, Process, ProcessHandle, ProcessKind, ProcessMeta, ProcessSpec, ProcessTable,

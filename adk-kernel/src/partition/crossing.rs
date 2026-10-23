@@ -918,3 +918,53 @@ impl Tool for CrossingTool {
             .await
     }
 }
+
+/// A crossing that keeps happening (spec 3.2 §7.8): what the maintenance process reports, with
+/// partition membership as the remedy, never a waiver.
+///
+/// # Example
+///
+/// ```rust
+/// use adk_kernel::{CrossingResource, RecurringCrossing};
+///
+/// let recurring = RecurringCrossing::new("home", "work", CrossingResource::Driver, "calendar", 14);
+/// assert!(recurring.remedy().contains("move calendar into home, or merge home and work"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct RecurringCrossing {
+    /// The partition the requests came from.
+    pub from: PartitionId,
+    /// The partition they reached.
+    pub to: PartitionId,
+    /// What they reached.
+    pub resource: CrossingResource,
+    /// The resource's name.
+    pub name: String,
+    /// How many crossings in the window: each request held, denied, or let through by its
+    /// run's approval.
+    pub count: usize,
+}
+
+impl RecurringCrossing {
+    /// `count` crossings from `from` into `to`'s `resource` named `name`.
+    pub fn new(
+        from: impl Into<PartitionId>,
+        to: impl Into<PartitionId>,
+        resource: CrossingResource,
+        name: impl Into<String>,
+        count: usize,
+    ) -> Self {
+        Self { from: from.into(), to: to.into(), resource, name: name.into(), count }
+    }
+
+    /// The report line: how often, and that the remedy is partition membership.
+    pub fn remedy(&self) -> String {
+        format!(
+            "partition {} crossed into {} › {} {} times; if it needs it this often, move {} into \
+             {}, or merge {} and {} (`adk-rust partitions`); a crossing is never waived",
+            self.from, self.to, self.name, self.count, self.name, self.from, self.from, self.to
+        )
+    }
+}
