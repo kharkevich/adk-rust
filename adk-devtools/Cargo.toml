@@ -12,6 +12,11 @@ readme = "README.md"
 keywords = ["adk", "agent", "coding", "tools", "filesystem"]
 categories = ["development-tools", "asynchronous"]
 
+[features]
+# `LanguageServerPool`: language servers over stdio JSON-RPC, for diagnostics after edits
+# and navigation (spec 3.1 §7.28, §10 D11).
+lsp = ["dep:lsp-types", "tokio/sync"]
+
 [dependencies]
 adk-core.workspace = true
 async-trait.workspace = true
@@ -23,6 +28,8 @@ tokio = { workspace = true, features = ["fs", "process", "time", "io-util", "rt"
 regex.workspace = true
 walkdir = "2.5"
 glob = "0.3"
+# The LSP 3.17 types; 0.95 is the line rust-analyzer itself builds on (`url::Url` URIs).
+lsp-types = { version = "0.95.1", optional = true }
 
 # Only used for the process-group kill that stops a timed-out command's descendants.
 [target.'cfg(unix)'.dependencies]

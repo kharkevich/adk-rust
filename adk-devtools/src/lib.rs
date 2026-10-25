@@ -51,6 +51,8 @@ mod launcher;
 mod toolset;
 mod workspace;
 
+#[cfg(feature = "lsp")]
+pub mod lsp;
 pub mod tools;
 
 /// A process a [`CommandLauncher`] started itself in a Job Object, which
