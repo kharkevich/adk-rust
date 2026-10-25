@@ -31,6 +31,7 @@
 //! }
 //! ```
 
+mod agents;
 mod args;
 mod catch_up;
 mod commands;
