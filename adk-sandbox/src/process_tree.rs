@@ -18,20 +18,29 @@ use std::os::windows::io::{
     AsHandle, AsRawHandle as _, BorrowedHandle, FromRawHandle as _, OwnedHandle,
 };
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::{
+    ERROR_MORE_DATA, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, INFINITE, OpenProcess, OpenThread, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-    ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
+    GetExitCodeProcess, INFINITE, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ResumeThread, THREAD_SUSPEND_RESUME,
+    WaitForSingleObject,
 };
+
+/// How often a terminating job is asked whether its processes have exited.
+const TERMINATION_POLL: Duration = Duration::from_millis(5);
 
 /// The process creation flag that starts a process suspended, so
 /// [`JobObject::contain_suspended`] can place it in a job before it runs.
@@ -180,11 +189,156 @@ impl JobObject {
         self.companions.items.push(companion);
     }
 
+    /// How long [`terminate_and_wait`](Self::terminate_and_wait) callers wait by default for
+    /// the job's processes to exit: termination is normally done in milliseconds.
+    pub const TERMINATION_WAIT: Duration = Duration::from_secs(2);
+
     /// Kills every process in the job. A job with no process left is unaffected.
+    ///
+    /// Termination is asynchronous: a process can still complete I/O it had in flight, such
+    /// as a write to a file, after this returns. [`terminate_and_wait`](Self::terminate_and_wait)
+    /// returns only once every process has exited.
     pub fn terminate(&self) {
         // SAFETY: the handle is open. A failure means the job has no process left.
         unsafe {
             TerminateJobObject(self.handle.as_raw_handle(), 1);
+        }
+    }
+
+    /// How many processes the job counts as active.
+    ///
+    /// A terminated process leaves the count before it has finished exiting;
+    /// [`terminate_and_wait`](Self::terminate_and_wait) waits for the exit itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// let job = JobObject::new()?;
+    /// assert_eq!(job.active_processes()?, 0);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn active_processes(&self) -> io::Result<u32> {
+        // SAFETY: the structure is plain data for which all zeroes is valid.
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is writable and the size passed is its own; the handle is open.
+        let queried = unsafe {
+            QueryInformationJobObject(
+                self.handle.as_raw_handle(),
+                JobObjectBasicAccountingInformation,
+                (&raw mut info).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 { Err(io::Error::last_os_error()) } else { Ok(info.ActiveProcesses) }
+    }
+
+    /// Kills every process in the job and waits, for at most `limit`, until each has exited,
+    /// so nothing a process had in flight lands after the call returns. Returns whether every
+    /// process has exited. The wait blocks the thread;
+    /// [`terminate_and_wait_async`](Self::terminate_and_wait_async) is its async form.
+    ///
+    /// A terminated process leaves the job's [`active_processes`](Self::active_processes)
+    /// count before it has finished exiting, and can still complete a write it had in
+    /// flight in between. The wait therefore holds each process open from before the
+    /// termination and returns once every handle is signalled, which happens only when the
+    /// process has exited.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// let job = JobObject::new()?;
+    /// assert!(job.terminate_and_wait(JobObject::TERMINATION_WAIT)?);
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn terminate_and_wait(&self, limit: Duration) -> io::Result<bool> {
+        let mut termination = Termination::begin(self)?;
+        let deadline = Instant::now() + limit;
+        loop {
+            if termination.finished()? {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(TERMINATION_POLL);
+        }
+    }
+
+    /// [`terminate_and_wait`](Self::terminate_and_wait) that sleeps on the Tokio timer
+    /// instead of blocking the thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error when the job cannot be queried.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use adk_sandbox::process_tree::JobObject;
+    ///
+    /// # async fn run() -> std::io::Result<()> {
+    /// let job = JobObject::new()?;
+    /// assert!(job.terminate_and_wait_async(JobObject::TERMINATION_WAIT).await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn terminate_and_wait_async(&self, limit: Duration) -> io::Result<bool> {
+        let mut termination = Termination::begin(self)?;
+        let deadline = Instant::now() + limit;
+        loop {
+            if termination.finished()? {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(TERMINATION_POLL).await;
+        }
+    }
+
+    /// The ids of the processes in the job.
+    fn process_ids(&self) -> io::Result<Vec<u32>> {
+        let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList)
+            / size_of::<usize>();
+        let mut capacity = 16;
+        loop {
+            // A `usize` buffer is aligned for the list, whose ids are `usize`s after its header.
+            let mut buffer = vec![0usize; header + capacity];
+            // SAFETY: `buffer` is writable for the size passed and aligned for the structure;
+            // the handle is open.
+            let queried = unsafe {
+                QueryInformationJobObject(
+                    self.handle.as_raw_handle(),
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    u32::try_from(size_of_val(buffer.as_slice())).unwrap_or(u32::MAX),
+                    std::ptr::null_mut(),
+                )
+            };
+            let error = io::Error::last_os_error();
+            // SAFETY: `buffer` holds at least the structure and is aligned for it.
+            let list = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            if queried != 0 {
+                let listed = header..header + list.NumberOfProcessIdsInList as usize;
+                return Ok(buffer[listed].iter().map(|&id| id as u32).collect());
+            }
+            if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+                return Err(error);
+            }
+            capacity = (list.NumberOfAssignedProcesses as usize).max(capacity * 2);
         }
     }
 
@@ -216,6 +370,67 @@ impl JobObject {
 impl AsHandle for JobObject {
     fn as_handle(&self) -> BorrowedHandle<'_> {
         self.handle.as_handle()
+    }
+}
+
+/// A terminated job whose processes are held open until each has exited.
+struct Termination<'a> {
+    job: &'a JobObject,
+    /// The processes seen in the job, by id; a held handle keeps its id from being reused.
+    held: Vec<(u32, OwnedHandle)>,
+}
+
+impl<'a> Termination<'a> {
+    /// Opens the job's processes, then terminates them, so each is held before it can exit.
+    /// The job is terminated even when its processes cannot be listed.
+    fn begin(job: &'a JobObject) -> io::Result<Self> {
+        let mut termination = Self { job, held: Vec::new() };
+        let held = termination.hold_listed();
+        job.terminate();
+        held.map(|()| termination)
+    }
+
+    /// Opens every process the job lists that is not held yet.
+    fn hold_listed(&mut self) -> io::Result<()> {
+        for pid in self.job.process_ids()? {
+            if self.held.iter().any(|(held, _)| *held == pid) {
+                continue;
+            }
+            // SAFETY: the result is checked; the rights are the two the checks below need.
+            let process = unsafe {
+                OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+            };
+            // A process that cannot be opened has exited, or is left to the job's count.
+            if process.is_null() {
+                continue;
+            }
+            // SAFETY: `process` was just opened and nothing else owns it.
+            let process = unsafe { OwnedHandle::from_raw_handle(process) };
+            // The listed process may have exited and its id gone to a process outside the job.
+            let mut member = 0;
+            // SAFETY: both handles are open and `member` is writable.
+            let queried = unsafe {
+                IsProcessInJob(
+                    process.as_raw_handle(),
+                    self.job.handle.as_raw_handle(),
+                    &raw mut member,
+                )
+            };
+            if queried != 0 && member != 0 {
+                self.held.push((pid, process));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether every process in the job has exited.
+    fn finished(&mut self) -> io::Result<bool> {
+        self.hold_listed()?;
+        let exited = self.held.iter().all(|(_, process)| {
+            // SAFETY: each handle is open while `self` lives.
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_OBJECT_0 }
+        });
+        Ok(exited && self.job.active_processes()? == 0)
     }
 }
 
