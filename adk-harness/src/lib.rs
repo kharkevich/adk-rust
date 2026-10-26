@@ -174,9 +174,9 @@ pub use facts::{
 };
 #[cfg(feature = "memory")]
 pub use facts::{
-    FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactFilter, FactIndex, FactKind, FactProjects,
-    FactScope, FactSource, FactStatus, FactStore, FileFactStore, InMemoryFactStore, LocalFactIndex,
-    LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
+    FACT_AUTHOR_PREFIX, FACT_TEXT_MAX_CHARS, FactEmbedding, FactFilter, FactIndex, FactKind,
+    FactProjects, FactScope, FactSource, FactStatus, FactStore, FileFactStore, InMemoryFactStore,
+    LocalFactIndex, LongTermMemoryConfig, MemoryFact, MemoryServiceIndex, Provenance, fact_digest,
     redact_fact_text,
 };
 #[cfg(all(feature = "memory", feature = "kernel"))]
@@ -318,4 +318,4 @@ pub use toolset::HarnessToolset;
 pub use web::WebSearchPath;
 #[cfg(feature = "web")]
 pub use web::{DeepSeekSearch, SearxngSearch};
-pub use web::{ProviderWebTools, SearchHit, SearchProvider, WebConfig};
+pub use web::{ProviderWebTools, SearchDomains, SearchHit, SearchProvider, WebConfig};
