@@ -23,8 +23,9 @@ use crate::workspace::{Precondition, Workspace};
 /// in-memory originals, so the call writes every file or none (§9.2 I67). A file's
 /// precondition is its `expect_sha256` entry when the call gives one, else this session and
 /// agent's read record when one exists, and a file that differs is answered
-/// `devtools.stale`. Each file keeps its line endings. The report lists every file with
-/// its digests before and after:
+/// `devtools.stale`. Each file keeps its line endings. The report and its errors name each
+/// file as the patch does, relative to the workspace with `/` separators on every platform.
+/// The report lists every file with its digests before and after:
 ///
 /// ```json
 /// { "files": [{ "path": "src/lib.rs", "op": "update", "beforeSha256": "…", "afterSha256": "…" }] }
