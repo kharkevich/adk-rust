@@ -119,6 +119,9 @@ pub struct HarnessAgentBuilder {
     mode_store: Option<Arc<dyn ModeStore>>,
     standing_rules: Option<Arc<dyn StandingRuleStore>>,
     shell_ledger: Option<Arc<dyn ShellLedger>>,
+    background_shells: crate::shell::BackgroundShellConfig,
+    shell_pids: Option<Arc<dyn crate::shell::ShellPidRegistry>>,
+    shell_supervisor: Option<Arc<crate::shell::ShellSupervisor>>,
     read_records: Option<Arc<dyn adk_devtools::ReadLedger>>,
     operator_policy: Option<Arc<dyn ToolPolicy>>,
     origin_classes: Vec<Arc<dyn crate::policy::OriginClasses>>,
@@ -253,6 +256,9 @@ impl HarnessAgentBuilder {
             mode_store: None,
             standing_rules: None,
             shell_ledger: None,
+            background_shells: crate::shell::BackgroundShellConfig::default(),
+            shell_pids: None,
+            shell_supervisor: None,
             read_records: None,
             operator_policy: None,
             origin_classes: Vec::new(),
@@ -553,6 +559,30 @@ impl HarnessAgentBuilder {
     /// Where the shell ledger is kept (default in memory).
     pub fn shell_ledger(mut self, ledger: Arc<dyn ShellLedger>) -> Self {
         self.shell_ledger = Some(ledger);
+        self
+    }
+
+    /// The limits of background shells (spec 3.1 §7.29); default
+    /// [`BackgroundShellConfig::unattended`](crate::BackgroundShellConfig::unattended),
+    /// and [`attended`](crate::BackgroundShellConfig::attended) for a REPL a person watches.
+    pub fn background_shells(mut self, config: crate::shell::BackgroundShellConfig) -> Self {
+        self.background_shells = config;
+        self
+    }
+
+    /// Where each background shell's process is recorded (default in memory), so the next
+    /// start reaps what a crash left running (spec 3.1 §7.29).
+    pub fn shell_pid_registry(mut self, registry: Arc<dyn crate::shell::ShellPidRegistry>) -> Self {
+        self.shell_pids = Some(registry);
+        self
+    }
+
+    /// Runs background shells on `shells`, which every harness of a process can share, so a
+    /// harness rebuilt for the same session keeps its shells (spec 3.1 §7.29). Its limits
+    /// and pid registry replace [`background_shells`](Self::background_shells) and
+    /// [`shell_pid_registry`](Self::shell_pid_registry).
+    pub fn shell_supervisor(mut self, shells: Arc<crate::shell::ShellSupervisor>) -> Self {
+        self.shell_supervisor = Some(shells);
         self
     }
 
@@ -1872,6 +1902,11 @@ impl HarnessAgentBuilder {
             None => rules,
         };
         let ledger = self.shell_ledger.unwrap_or_else(|| Arc::new(InMemoryShellLedger::new()));
+        let shells = crate::shell::supervisor(
+            self.shell_supervisor.take(),
+            self.background_shells.clone(),
+            self.shell_pids.take(),
+        );
         let approval_store = self
             .approval_store
             .or_else(|| self.approval_service.as_ref().and_then(|service| service.approval_store()))
@@ -1922,7 +1957,8 @@ impl HarnessAgentBuilder {
                     ledger.clone(),
                 )
                 .allow_unsandboxed_retry(allow_unsandboxed_retry)
-                .with_file_gate(file_gate.clone());
+                .with_file_gate(file_gate.clone())
+                .with_outputs(shells.outputs().clone());
                 let pool = bash.pool();
                 tools.push(Arc::new(bash));
                 Some(pool)
@@ -1946,7 +1982,8 @@ impl HarnessAgentBuilder {
             )
             .with_mode_store(mode_store.clone(), self.mode)
             .allow_unsandboxed_retry(allow_unsandboxed_retry)
-            .with_file_gate(file_gate.clone());
+            .with_file_gate(file_gate.clone())
+            .with_shells(shells.clone());
             #[cfg(feature = "sandbox")]
             let bash = match shell.launcher.clone() {
                 Some(launcher) => bash.with_sandbox(launcher),
@@ -1957,6 +1994,10 @@ impl HarnessAgentBuilder {
             #[cfg(not(feature = "auth"))]
             let bash: Arc<dyn Tool> = Arc::new(bash);
             tools.push(bash);
+            tools.push(Arc::new(crate::shell::ShellKillTool::new(shells.clone())));
+        }
+        if tools.iter().any(|tool| tool.name() == "bash") {
+            tools.push(Arc::new(crate::shell::ShellOutputTool::new(shells.clone())));
         }
         if self.todos {
             match &self.last_todos {
@@ -2216,7 +2257,8 @@ impl HarnessAgentBuilder {
             .with_banner(if self.website_preset { website_banner } else { mode_banner })
             .with_observers(&observers)
             .with_effort(self.effort)
-            .with_rules_digest(rules.clone());
+            .with_rules_digest(rules.clone())
+            .with_shells(shells);
         // Under a kernel, each run's tool calls write their ledger rows (spec 3.2 §7.10).
         #[cfg(all(feature = "kernel", feature = "observe"))]
         run_trails.attach_ledger(self.kernel_ledger.clone(), &toolset.all_tools());

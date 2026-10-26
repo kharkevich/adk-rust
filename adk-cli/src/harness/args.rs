@@ -367,6 +367,9 @@ struct ConfigFile {
     store: Option<StoreTable>,
     /// `[plan]`: where plans are checkpointed (spec 3.1 §7.11); the user config only.
     plan: Option<PlanTable>,
+    /// `[shells]`: background shell limits (spec 3.1 §7.29); a project file may only lower
+    /// them.
+    shells: Option<ShellsTable>,
     /// `[snapshots]`: whether and how the workspace is snapshotted (spec 3.1 §7.27); the
     /// user config only.
     snapshots: Option<SnapshotsTable>,
@@ -424,6 +427,58 @@ struct WebTable {
     searxng_url: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
+}
+
+/// The `[shells]` table: background shell limits (spec 3.1 §7.29).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ShellsTable {
+    /// The most background shells one session runs at once.
+    max_running: Option<usize>,
+    /// How long a background shell of a goal, served or kernel run lives, in minutes
+    /// (at most 120); the REPL sets no lifetime.
+    lifetime_minutes: Option<u64>,
+}
+
+/// Background shell limits from `[shells]` (spec 3.1 §7.29); `None` keeps the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShellLimits {
+    /// The most background shells one session runs at once.
+    pub max_running: Option<usize>,
+    /// How long a background shell of an unattended run lives.
+    pub lifetime_minutes: Option<u64>,
+}
+
+impl ShellLimits {
+    /// Lowers each limit to `table`'s where it sets a lower one: what a project file may do.
+    fn narrow(&mut self, table: &ShellsTable) {
+        let lower = |current: Option<u64>, wanted: Option<u64>, default: u64| match wanted {
+            Some(wanted) => Some(wanted.min(current.unwrap_or(default))),
+            None => current,
+        };
+        self.max_running =
+            lower(self.max_running.map(|n| n as u64), table.max_running.map(|n| n as u64), 8)
+                .map(|n| n as usize);
+        self.lifetime_minutes = lower(self.lifetime_minutes, table.lifetime_minutes, 30);
+    }
+
+    /// `config` with these limits applied.
+    pub fn apply(
+        self,
+        config: adk_harness::BackgroundShellConfig,
+    ) -> adk_harness::BackgroundShellConfig {
+        let config = match self.max_running {
+            Some(count) => config.with_max_running(count),
+            None => config,
+        };
+        match (self.lifetime_minutes, config.lifetime()) {
+            // An attended REPL sets no lifetime; the limit is for unattended runs.
+            (Some(minutes), Some(_)) => {
+                config.with_lifetime(std::time::Duration::from_secs(minutes * 60))
+            }
+            _ => config,
+        }
+    }
 }
 
 /// The `[store]` table.
@@ -565,6 +620,9 @@ pub struct ResolvedHarnessArgs {
     /// The `[[hooks]]` of the user config, source `User` (spec 3.1 §7.22); the workspace's
     /// are read at build and run under its trust.
     pub user_hooks: HookSet,
+    /// `[shells]`: background shell limits; the project file may only lower the user's
+    /// (spec 3.1 §7.29).
+    pub shells: ShellLimits,
     /// Settings a config file made that were ignored, and why.
     pub notes: Vec<String>,
     /// Snapshots before each turn (spec 3.1 §7.27): on by default, `None` with
@@ -649,6 +707,7 @@ impl HarnessArgs {
         let mut effort_explicit = false;
         let mut store_key = None;
         let mut checkpointer = None;
+        let mut shells = ShellLimits::default();
         let mut snapshots = Some(SnapshotConfig::default());
         if let Some(user) = &user {
             let origin = user_config.map_or_else(String::new, |path| path.display().to_string());
@@ -687,6 +746,12 @@ impl HarnessArgs {
             }
             store_key = user.store.as_ref().and_then(|store| store.key.clone());
             checkpointer = user.plan.as_ref().and_then(|plan| plan.checkpointer.clone());
+            if let Some(table) = &user.shells {
+                shells = ShellLimits {
+                    max_running: table.max_running,
+                    lifetime_minutes: table.lifetime_minutes,
+                };
+            }
             if let Some(table) = &user.snapshots {
                 snapshots = table.apply(&origin, &mut notes);
             }
@@ -742,6 +807,10 @@ impl HarnessArgs {
                 for key in table.unknown.keys() {
                     notes.push(format!("{origin}: unknown key `web.{key}` ignored"));
                 }
+            }
+            // A project may lower the background shell limits, never raise them.
+            if let Some(table) = &project.shells {
+                shells.narrow(table);
             }
             // Effort costs money, not permissions: a project may set it; flags win.
             if let Some(policy) = project.effort {
@@ -851,6 +920,7 @@ impl HarnessArgs {
             hooks: !self.no_hooks,
             checkpointer,
             user_hooks,
+            shells,
             notes,
             snapshots,
         })
@@ -916,10 +986,34 @@ mod tests {
                 hooks: true,
                 checkpointer: None,
                 user_hooks: HookSet::default(),
+                shells: ShellLimits::default(),
                 notes: vec![],
                 snapshots: Some(SnapshotConfig::default()),
             }
         );
+    }
+
+    /// `[shells]` in the user config sets the limits; the project file may only lower them
+    /// (spec 3.1 §7.29, §8.1).
+    #[test]
+    fn a_project_file_only_lowers_the_shell_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        write(&user, "[shells]\nmax_running = 4\nlifetime_minutes = 60\n");
+        write(
+            &dir.path().join(PROJECT_CONFIG_FILE),
+            "[shells]\nmax_running = 16\nlifetime_minutes = 10\n",
+        );
+        let resolved = args_in(dir.path()).resolve(HarnessMode::Ask, Some(&user)).unwrap();
+        assert_eq!(
+            resolved.shells,
+            ShellLimits { max_running: Some(4), lifetime_minutes: Some(10) }
+        );
+        let unattended = resolved.shells.apply(adk_harness::BackgroundShellConfig::unattended());
+        assert_eq!(unattended.max_running, 4);
+        assert_eq!(unattended.lifetime(), Some(std::time::Duration::from_secs(600)));
+        let attended = resolved.shells.apply(adk_harness::BackgroundShellConfig::attended());
+        assert_eq!(attended.lifetime(), None, "the REPL sets no lifetime");
     }
 
     /// Snapshots are on unless the user config or the flag turns them off; the workspace
