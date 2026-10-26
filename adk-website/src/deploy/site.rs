@@ -80,7 +80,8 @@ pub struct SiteOptions {
     pub reply_template: Option<String>,
     /// A payment desk; otherwise `payments.json`, otherwise payments are refused.
     pub payments: Option<Arc<dyn PaymentDesk>>,
-    /// A calendar; otherwise `calendar.json`, otherwise no slot is open.
+    /// A calendar; otherwise the CalDAV calendar in `caldav.json`, otherwise `calendar.json`,
+    /// otherwise no slot is open.
     pub calendar: Option<Arc<dyn Calendar>>,
     /// `web_search` providers for AEO tracking, with the questions to ask.
     pub search: Vec<Arc<dyn SearchProvider>>,
@@ -300,6 +301,7 @@ impl RunningSite {
             "data/keys/release.jwk",
         );
         let announcer = Arc::new(DeferredAnnouncer::default());
+        let verify_edge = Arc::new(crate::edge::adapters::DeferredFetcher::default());
         let quotes = Arc::new(ReviewQuotes::open(paths.data().join("reviews.json"))?);
         let charters: Arc<dyn CharterStore> = stores.charters.clone();
         let mut builder = SiteRuntime::builder(
@@ -318,7 +320,12 @@ impl RunningSite {
                 .gate(&site.origin)
                 .with_extension(Arc::new(delegation))
                 // Pages quote a found review only as its owner approved (S2).
-                .with_extension(Arc::new(QuotedReviews::new(quotes.clone()))),
+                .with_extension(Arc::new(QuotedReviews::new(quotes.clone())))
+                .with_extension(Arc::new(super::checks::preview_verification(
+                    &project,
+                    host.clone(),
+                    verify_edge.clone(),
+                ))),
         )
         .announcer(announcer.clone());
         if let Some(previous) = previous {
@@ -384,8 +391,10 @@ impl RunningSite {
                 adk_auth::web_bot_auth::HttpSignatureVerifier::builder(Arc::new(directory)).build(),
             ))
             .build();
+        let caldav = project::caldav(&paths)?.map(|c| Arc::new(c) as Arc<dyn Calendar>);
         let calendar = match &options.calendar {
             Some(calendar) => Some(calendar.clone()),
+            None if caldav.is_some() => caldav,
             None => project::slots(&paths)?
                 .map(|slots| Arc::new(InMemoryCalendar::new(slots)) as Arc<dyn Calendar>),
         };
@@ -515,6 +524,7 @@ impl RunningSite {
         let triggers = vec![experiments.trigger(&site.name, &cron)];
         let router = site_router(&edge.edge, host, &project.config.name)
             .merge(stream_router(updates.clone()));
+        verify_edge.set(Arc::new(adk_awp::verify::fetch::RouterFetcher::new(router.clone())));
         Ok(Self {
             tracker: tracker(aeo.is_some()),
             site,

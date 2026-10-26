@@ -51,8 +51,9 @@ adk-runner.workspace = true
 # The context the owner's channel runs the back office's media intake in (spec 3.5 S18).
 adk-tool.workspace = true
 adk-session = { workspace = true, features = ["sqlite"] }
-# Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8).
-adk-site = { workspace = true, features = ["migrate"] }
+# Migration sources, freeze, quarantine and probes for onboarding and the Guardian (§7.8);
+# `awp verify` against the preview in the launch gate (§7.8.1).
+adk-site = { workspace = true, features = ["migrate", "verify"] }
 awp-types.workspace = true
 async-trait.workspace = true
 axum = "0.8"
@@ -66,6 +67,9 @@ getrandom = "0.3"
 zeroize = "1.8.2"
 # The third-party script check parses generated HTML, as the launch gate does.
 scraper = "0.25"
+# The CalDAV calendar driver: its HTTP client and its multistatus answers (spec 3.5 §7.5).
+quick-xml = "0.41"
+reqwest.workspace = true
 # JSON Schema of the owner's views, for the surfaces' generated types (spec 3.5 §7.16 `ui`).
 schemars = { version = "1.0", features = ["chrono04"] }
 # Advisory version ranges against the edge's lockfile (spec 3.5 §7.20, S10).
