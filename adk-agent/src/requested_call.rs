@@ -1,0 +1,257 @@
+//! A call a person asked for through something the agent drew (spec 3.3 §7.4 rule 5).
+//!
+//! The run that carries a [`RequestedCall`] writes what the person asked for in their words,
+//! then the call as the agent's own, then holds it for the person's decision or refuses it;
+//! either way the run ends before any model call. The model reads the call as the person's
+//! ([`for_model`]): never as a call it made.
+//! A later run resumes the held call as it resumes any other.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use adk_core::{
+    Content, Event, FunctionResponseData, GovernedCall, InvocationContext, Part, RequestedCall,
+    RequestedViaKind, Result, Tool, ToolAuthorization, ToolGate, authorize_tool_call,
+};
+
+use crate::guardrails::{GuardrailScreen, ToolGuardrailSet};
+
+/// Whether the session already carries `call`: a run that resumes its hold, or a woken run
+/// that starts from the same input, never takes it twice.
+pub(crate) fn taken(ctx: &dyn InvocationContext, call: &RequestedCall) -> bool {
+    ctx.session().conversation_history().iter().flat_map(|content| &content.parts).any(|part| {
+        match part {
+            Part::FunctionCall { id, .. } | Part::FunctionResponse { id, .. } => {
+                id.as_deref() == Some(call.function_call_id.as_str())
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Why `ctx`'s run may not carry `call` at all, before its tool is looked up.
+fn refused_run(ctx: &dyn InvocationContext, call: &RequestedCall) -> Option<String> {
+    if !ctx.is_authenticated() {
+        return Some("a call a person asks for needs a signed-in person".to_string());
+    }
+    if call.requested_by.id != ctx.user_id() {
+        return Some("it was asked for by someone other than this session's person".to_string());
+    }
+    if !RequestedCall::is_requested_id(&call.function_call_id) {
+        return Some("the request does not carry a requested call ID".to_string());
+    }
+    RequestedCall::refused_tool(&call.tool_name).map(str::to_string)
+}
+
+/// Why `args` do not fit `tool`'s parameters, or `None` when they do.
+fn invalid_arguments(tool: &dyn Tool, args: &serde_json::Value) -> Option<String> {
+    if !args.is_object() {
+        return Some("its arguments are not one JSON object".to_string());
+    }
+    let schema = tool.parameters_schema()?;
+    let validator = match jsonschema::validator_for(&schema) {
+        Ok(validator) => validator,
+        Err(error) => return Some(format!("the tool's parameters cannot be checked: {error}")),
+    };
+    let violations: Vec<String> = validator
+        .iter_errors(args)
+        .take(4)
+        .map(|error| {
+            let path = error.instance_path().as_str().to_string();
+            let location = if path.is_empty() { "arguments".to_string() } else { path };
+            format!("{location}: {error}")
+        })
+        .collect();
+    (!violations.is_empty())
+        .then(|| format!("its arguments do not fit the tool: {}", violations.join("; ")))
+}
+
+/// The events of `call` taken by `agent_name`: the call, its answer, and for a held call
+/// its confirmation request.
+fn call_events(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    call: &RequestedCall,
+    response: serde_json::Value,
+) -> Vec<Event> {
+    let event = |content: Content| {
+        let mut event = Event::new(ctx.invocation_id());
+        event.author = agent_name.to_string();
+        event.branch = ctx.branch().to_string();
+        event.llm_response.content = Some(content);
+        call.mark(&mut event);
+        event
+    };
+    let issued = event(Content {
+        role: "model".to_string(),
+        parts: vec![Part::FunctionCall {
+            name: call.tool_name.clone(),
+            args: call.args.clone(),
+            id: Some(call.function_call_id.clone()),
+            thought_signature: None,
+        }],
+    });
+    let answered = event(Content {
+        role: "function".to_string(),
+        parts: vec![Part::FunctionResponse {
+            function_response: FunctionResponseData::new(call.tool_name.clone(), response),
+            id: Some(call.function_call_id.clone()),
+            annotations: None,
+        }],
+    });
+    vec![asked(ctx, call), issued, answered]
+}
+
+/// What the person asked for, in their words, before the call.
+fn asked(ctx: &dyn InvocationContext, call: &RequestedCall) -> Event {
+    let what = match call.via.kind {
+        RequestedViaKind::Form => format!(
+            "I pressed the `{}` button on the form `{}` you drew (version {}).",
+            call.via.action_id, call.via.surface_id, call.via.version
+        ),
+        _ => format!(
+            "I used the app `{}` you showed (version {}, action `{}`).",
+            call.via.surface_id, call.via.version, call.via.action_id
+        ),
+    };
+    let mut event = Event::new(ctx.invocation_id());
+    event.author = "user".to_string();
+    event.llm_response.content = Some(Content {
+        role: "user".to_string(),
+        parts: vec![Part::Text {
+            text: format!(
+                "{what} It asks to run {} with {}; it runs only once I decide.",
+                call.tool_name, call.args
+            ),
+        }],
+    });
+    call.mark(&mut event);
+    event
+}
+
+/// `contents` as the model reads them: a requested call leaves the model's turns, and its
+/// answer is the person's line after what they asked for. A model that reads a call it did
+/// not make as its own disowns it, and a provider that pairs a call with its result by ID
+/// never receives one it did not issue.
+pub(crate) fn for_model(contents: Vec<Content>) -> Vec<Content> {
+    let mut out: Vec<Content> = Vec::with_capacity(contents.len());
+    for mut content in contents {
+        let mut said = Vec::new();
+        content.parts.retain(|part| match part {
+            Part::FunctionCall { id: Some(id), .. } => !RequestedCall::is_requested_id(id),
+            Part::FunctionResponse { function_response, id: Some(id), .. }
+                if RequestedCall::is_requested_id(id) =>
+            {
+                said.push(Part::Text {
+                    text: format!(
+                        "The {} call I asked for answered: {}",
+                        function_response.name, function_response.response
+                    ),
+                });
+                false
+            }
+            _ => true,
+        });
+        if !content.parts.is_empty() {
+            out.push(content);
+        }
+        if !said.is_empty() {
+            match out.last_mut() {
+                Some(last) if last.role == "user" => last.parts.extend(said),
+                _ => out.push(Content { role: "user".to_string(), parts: said }),
+            }
+        }
+    }
+    out
+}
+
+/// The events that refuse `call` with `error`, the answer the model reads.
+fn refused(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    call: &RequestedCall,
+    error: String,
+) -> Vec<Event> {
+    tracing::info!(
+        tool.name = %call.tool_name,
+        agent.name = %agent_name,
+        "requested call refused"
+    );
+    call_events(ctx, agent_name, call, serde_json::json!({ "error": error }))
+}
+
+/// The events that refuse `call` for `reason`, answered as not run.
+pub(crate) fn refusal_events(
+    ctx: &dyn InvocationContext,
+    agent_name: &str,
+    call: &RequestedCall,
+    reason: &str,
+) -> Vec<Event> {
+    refused(ctx, agent_name, call, format!("Tool '{}' was not run: {reason}", call.tool_name))
+}
+
+/// Takes `call` for `agent_name`, whose tools are `tools`: the events that hold it for the
+/// person's decision, or refuse it.
+///
+/// # Errors
+///
+/// Returns the governed path's error: the kill switch, or an approval store, approval
+/// service or audit trail that fails.
+pub(crate) async fn take(
+    ctx: &Arc<dyn InvocationContext>,
+    agent_name: &str,
+    tools: &HashMap<String, Arc<dyn Tool>>,
+    guardrails: &ToolGuardrailSet,
+    call: &RequestedCall,
+) -> Result<Vec<Event>> {
+    if let Some(reason) = refused_run(ctx.as_ref(), call) {
+        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
+    }
+    let Some(tool) = tools.get(&call.tool_name) else {
+        let reason = format!("this agent has no tool named '{}'", call.tool_name);
+        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
+    };
+    if let Some(reason) = invalid_arguments(tool.as_ref(), &call.args) {
+        return Ok(refusal_events(ctx.as_ref(), agent_name, call, &reason));
+    }
+    let screen = GuardrailScreen(guardrails);
+    let mut gate = ToolGate::for_context(ctx.as_ref());
+    if !guardrails.is_empty() {
+        gate = gate.with_screen(&screen);
+    }
+    let governed =
+        GovernedCall::for_tool(tool.as_ref(), call.function_call_id.clone(), call.args.clone())
+            .requested(true);
+    match authorize_tool_call(&gate, governed).await? {
+        ToolAuthorization::Pending { request, reason } => {
+            tracing::info!(
+                tool.name = %call.tool_name,
+                agent.name = %agent_name,
+                "requested call held for the person's decision"
+            );
+            let mut events = call_events(
+                ctx.as_ref(),
+                agent_name,
+                call,
+                adk_core::confirmation_pending_response(reason),
+            );
+            let mut held =
+                crate::llm_agent::confirmation_event(ctx.invocation_id(), agent_name, request);
+            held.branch = ctx.branch().to_string();
+            call.mark(&mut held);
+            events.push(held);
+            Ok(events)
+        }
+        ToolAuthorization::Refuse { reason, .. } => {
+            Ok(refused(ctx.as_ref(), agent_name, call, reason))
+        }
+        // Authorized for a call with no decision would break the primitive's rule, so it is
+        // refused rather than run.
+        ToolAuthorization::Execute { .. } => Ok(refusal_events(
+            ctx.as_ref(),
+            agent_name,
+            call,
+            "it was not held for the person's decision",
+        )),
+    }
+}
