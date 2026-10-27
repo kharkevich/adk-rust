@@ -20,6 +20,29 @@ use adk_surface::genui::{
 use futures::StreamExt;
 use serde_json::{Value, json};
 
+/// `send_invoice`, which the drawn forms ask for; a send asks the person first, so it never
+/// runs here.
+struct SendInvoice;
+
+#[async_trait::async_trait]
+impl adk_core::Tool for SendInvoice {
+    fn name(&self) -> &str {
+        "send_invoice"
+    }
+
+    fn description(&self) -> &str {
+        "Sends an invoice."
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> adk_core::Result<Value> {
+        panic!("send_invoice never runs here");
+    }
+}
+
 /// A harness agent `finance` with the render tools, in Ask first, over `sessions`.
 async fn harness(
     script: Vec<ScriptedResponse>,
@@ -36,6 +59,7 @@ async fn harness(
         })
         .without_compaction()
         .toolset(Arc::new(DrawToolset::forms()))
+        .tool(Arc::new(SendInvoice))
         .build()
         .unwrap();
     let agent = Arc::new(agent);
@@ -253,4 +277,90 @@ async fn versions_rise_across_redraws_patches_parallel_drawings_and_restarts() {
     let removed =
         DrawnEnvelope::from_response(&drawings(&send(&second, "remove it").await)[0].1).unwrap();
     assert_eq!((removed.version, removed.deleted, removed.draft()), (4, true, None));
+}
+
+/// Drawings made side by side in one turn each keep their stored version, so a session whose
+/// history was compacted away still gives each surface a higher version after a restart.
+#[tokio::test]
+async fn side_by_side_drawings_each_keep_their_stored_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let status = json!({ "surfaceId": "status", "title": "Status", "rows": [{ "label": "Invoice", "value": "Draft" }] });
+    let both = || {
+        vec![
+            ScriptedResponse::function_calls([
+                ("render_card", status.clone()),
+                ("render_form", invoice_form()),
+            ]),
+            ScriptedResponse::text("both"),
+        ]
+    };
+    let first = harness(both(), sessions.clone(), &dir).await;
+    send(&first, "two at once").await;
+    let state = sessions
+        .get(adk_session::GetRequest {
+            app_name: "home".into(),
+            user_id: "ana".into(),
+            session_id: "thread-1".into(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .unwrap()
+        .state()
+        .all();
+
+    // The history is gone, as after a compaction; the session's state stays.
+    let compacted = SessionId::new("thread-2").unwrap();
+    sessions
+        .create(adk_session::CreateRequest {
+            app_name: "home".into(),
+            user_id: "ana".into(),
+            session_id: Some(compacted.to_string()),
+            state,
+        })
+        .await
+        .unwrap();
+    let second = harness(both(), sessions, &dir).await;
+    let stream = second.send(&ana(), &compacted, "two again").await.unwrap();
+    let events: Vec<Event> =
+        tokio::time::timeout(Duration::from_secs(10), stream.collect::<Vec<_>>())
+            .await
+            .expect("the run must finish")
+            .into_iter()
+            .map(|event| event.expect("event"))
+            .collect();
+    let mut versions: Vec<(String, u64)> = drawings(&events)
+        .into_iter()
+        .map(|(_, response, _)| {
+            let envelope = DrawnEnvelope::from_response(&response).expect("{response}");
+            (envelope.surface_id, envelope.version)
+        })
+        .collect();
+    versions.sort();
+    assert_eq!(versions, vec![("invoice-10".to_string(), 2), ("status".to_string(), 2)]);
+}
+
+/// A form's action names one of the drawing agent's own tools, so "Sending runs …" under its
+/// button is true from the start; one bound to a tool the agent lacks is refused when drawn.
+#[tokio::test]
+async fn a_form_bound_to_a_tool_the_agent_lacks_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let mut form = invoice_form();
+    form["actions"][0]["tool"] = json!("transfer_funds");
+    let script =
+        vec![ScriptedResponse::function_call("render_form", form), ScriptedResponse::text("done")];
+    let harness = harness(script, sessions, &dir).await;
+
+    let drawn = drawings(&send(&harness, "Draw the transfer form").await);
+
+    let (_, response, record) = &drawn[0];
+    assert_eq!(record, &None, "a refused drawing is never recorded");
+    let error = response["error"].as_str().unwrap_or_default();
+    assert!(
+        error
+            .contains("action 'send' runs 'transfer_funds', which is not one of the agent's tools"),
+        "{error}"
+    );
 }

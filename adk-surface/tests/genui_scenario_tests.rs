@@ -5,19 +5,21 @@
 //! | Step | What happens | What holds |
 //! |---|---|---|
 //! | 1 Draw | Finance draws two invoice forms, then a screen with "Allow once" and "Approved" | Two drawings, version 1, by Finance, each Send "Sending runs send_invoice and asks you first"; the screen is a plain notice; no decision; the render tools asked nobody |
-//! | 4 Forced | Go ahead, a policy that allows `send_invoice` and a confirmation handler that approves everything, set before anything is sent | — |
-//! | 2 Submit | The person types the address and presses Send | One decision for `send_invoice` with the typed values and `invoice` INV-10 from the stored form, still waiting under step 4's conditions; its timeline starts "You pressed Send on a form Finance drew"; no Always allow; the chat card carries no arguments; nothing ran; `surface.drawn.submitted` recorded (web, pointer) |
+//! | 4 Forced | Go ahead, a policy that allows `send_invoice`, a confirmation handler that approves everything, a standing rule the person made for it and an approval of the identical call, set before anything is sent | — |
+//! | 2 Submit | The person types the address and presses Send | One decision for `send_invoice` with the typed values and `invoice` INV-10 from the stored form, still waiting under step 4's conditions, the earlier approval discarded; its timeline starts "You pressed Send on a form Finance drew"; no Always allow; the chat card carries no arguments; nothing ran; `surface.drawn.submitted` recorded (web, pointer) |
 //! | 3 Tampering | Version 0, a forged INV-99, action `approve`, another person's session, an agent's, a chat's and a spoken send | `surface.drawn_changed`, `surface.invalid`, `surface.invalid`, `surface.not_found`, `surface.not_here`; still one decision, same version |
-//! | 5 Restart | The engine and kernel are dropped and rebuilt over the same SQLite stores | Both decisions still wait; the forms say "Sent at … · waiting for you" |
+//! | 5 Restart | The engine and kernel are dropped and rebuilt over the same stores | Both decisions still wait; the forms say "Sent at … · waiting for you" |
 //! | 6 Decide on the phone | Allow once on the first, Deny on its twin | `send_invoice` runs exactly once with the card's arguments: "Sent · done"; the denied twin never runs: "Sent · you said no"; the records name their own surfaces |
 //!
 //! Step 4's conditions are set before the first send: a mode loosened while a call waits
 //! ends that call (spec 3.1 §9.2 I14).
 //!
 //! The model is `ScriptedLlm`; the kernel, its durable worker, the harness, the approval
-//! service, the sessions, the runs, the approvals and the processes are real, on SQLite. The
-//! surface's audit trail is in memory, shared across the restart. Areas and added agents run
-//! in adk-cli's `genui_up` test; the terminal's fill-in pane in the terminal's own tests.
+//! service, the sessions, the runs, the approvals and the processes are real, on SQLite, and
+//! on PostgreSQL by hand (`a_drawn_form_is_sent_held_and_runs_once_on_postgres`, whose docs
+//! give the command). The surface's audit trail is in memory, shared across the restart.
+//! Areas and added agents run in adk-cli's `genui_up` test; the terminal's fill-in pane in
+//! the terminal's own tests.
 
 #![cfg(all(feature = "genui", feature = "web"))]
 
@@ -26,13 +28,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_core::audit_log::{AuditTrail, InMemoryAuditRecorder};
+use adk_core::principal::{SubjectKind, SubjectRef};
 use adk_core::{
-    ApprovalPolicy, ApprovalService, ApproverSelector, DeclarativePolicy, DurableRunStore, Llm,
-    PolicyDecision, RequestContext, Result as AdkResult, StoreApprovalService, Tool,
-    ToolConfirmationDecision, ToolConfirmationHandler, ToolConfirmationRequest, ToolContext,
-    ToolEffect, ToolPolicy, ToolPolicyRequest,
+    ActingContext, ApprovalPolicy, ApprovalScope, ApprovalService, ApprovalStore, ApproverSelector,
+    DeclarativePolicy, DurableRunStore, Llm, PolicyDecision, RequestContext, Result as AdkResult,
+    StoreApprovalService, Tool, ToolApproval, ToolConfirmationDecision, ToolConfirmationHandler,
+    ToolConfirmationRequest, ToolContext, ToolEffect, ToolOrigin, ToolPolicy, ToolPolicyRequest,
 };
-use adk_harness::{Harness, HarnessAgent, HarnessMode, InstructionsConfig};
+use adk_harness::{
+    Harness, HarnessAgent, HarnessMode, InstructionsConfig, OriginPin, RuleScope, StandingDecision,
+    StandingRule,
+};
 use adk_kernel::control::ControlPlaneConfig;
 use adk_kernel::{Kernel, KernelConfig, ProcessStore};
 use adk_model::{ScriptedLlm, ScriptedResponse};
@@ -128,6 +134,8 @@ impl ToolPolicy for InvoiceRule {
 /// What lives across a restart: the database, the record and what the tool ran.
 struct Lasting {
     dir: tempfile::TempDir,
+    /// A PostgreSQL database's URL; SQLite in `dir` when `None`.
+    postgres: Option<String>,
     audit: InMemoryAuditRecorder,
     runs: Arc<Mutex<Vec<Value>>>,
     tightened: Arc<AtomicBool>,
@@ -137,10 +145,17 @@ impl Lasting {
     fn new() -> Self {
         Self {
             dir: tempfile::tempdir().unwrap(),
+            postgres: None,
             audit: InMemoryAuditRecorder::new(),
             runs: Arc::new(Mutex::new(Vec::new())),
             tightened: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The stores on the PostgreSQL database at `url`, which must hold none of this
+    /// scenario's sessions yet.
+    fn on_postgres(url: &str) -> Self {
+        Self { postgres: Some(url.to_string()), ..Self::new() }
     }
 
     fn ran(&self) -> Vec<Value> {
@@ -155,11 +170,20 @@ struct Home {
     kernel: Kernel,
     engine: SurfaceEngine,
     api: axum::Router,
+    harness: Arc<Harness>,
 }
 
 async fn home(lasting: &Lasting, model: Arc<dyn Llm>, forced: bool) -> Home {
     home_with(lasting, model, forced, ControlPlaneConfig::default().without_socket()).await
 }
+
+/// The stores a home runs on: its sessions, approvals, durable runs and processes.
+type Stores = (
+    Arc<dyn SessionService>,
+    Arc<dyn ApprovalStore>,
+    Arc<dyn DurableRunStore>,
+    Arc<dyn ProcessStore>,
+);
 
 async fn home_with(
     lasting: &Lasting,
@@ -167,28 +191,42 @@ async fn home_with(
     forced: bool,
     control: ControlPlaneConfig,
 ) -> Home {
-    let path = lasting.dir.path().join("harness.db");
-    let url = format!("sqlite://{}?mode=rwc", path.display());
-    let sqlite = adk_session::SqliteSessionService::new(&url).await.unwrap();
-    sqlite.migrate().await.unwrap();
-    let pool = sqlite.pool().clone();
-    let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
-    approvals.migrate().await.unwrap();
-    let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
-    runs.migrate().await.unwrap();
-    let processes = adk_kernel::SqliteProcessStore::new(pool.clone());
-    processes.migrate().await.unwrap();
-    let runs: Arc<dyn DurableRunStore> = Arc::new(runs);
+    let (sessions, approvals, runs, processes): Stores = match &lasting.postgres {
+        None => {
+            let path = lasting.dir.path().join("harness.db");
+            let url = format!("sqlite://{}?mode=rwc", path.display());
+            let sqlite = adk_session::SqliteSessionService::new(&url).await.unwrap();
+            sqlite.migrate().await.unwrap();
+            let pool = sqlite.pool().clone();
+            let approvals = adk_session::SqliteApprovalStore::from_pool(pool.clone());
+            approvals.migrate().await.unwrap();
+            let runs = adk_session::SqliteRunStore::from_pool(pool.clone());
+            runs.migrate().await.unwrap();
+            let processes = adk_kernel::SqliteProcessStore::new(pool.clone());
+            processes.migrate().await.unwrap();
+            (Arc::new(sqlite), Arc::new(approvals), Arc::new(runs), Arc::new(processes))
+        }
+        Some(url) => {
+            let approvals = adk_session::PostgresApprovalStore::new(url).await.unwrap();
+            approvals.migrate().await.unwrap();
+            let pool = approvals.pool().clone();
+            let sessions = adk_session::PostgresSessionService::from_pool(pool.clone());
+            sessions.migrate().await.unwrap();
+            let runs = adk_session::PostgresRunStore::from_pool(pool.clone());
+            runs.migrate().await.unwrap();
+            let processes = adk_kernel::PostgresProcessStore::new(pool);
+            processes.migrate().await.unwrap();
+            (Arc::new(sessions), Arc::new(approvals), Arc::new(runs), Arc::new(processes))
+        }
+    };
     let service: Arc<dyn ApprovalService> = Arc::new(
-        StoreApprovalService::new(Arc::new(approvals))
-            .with_run_store(Arc::clone(&runs))
-            .with_router(
-                ApprovalPolicy::new([
-                    ApproverSelector::group("owner"),
-                    ApproverSelector::group("operator"),
-                ])
-                .allow_self_approval(),
-            ),
+        StoreApprovalService::new(approvals).with_run_store(Arc::clone(&runs)).with_router(
+            ApprovalPolicy::new([
+                ApproverSelector::group("owner"),
+                ApproverSelector::group("operator"),
+            ])
+            .allow_self_approval(),
+        ),
     );
     let workspace = lasting.dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -217,7 +255,6 @@ async fn home_with(
             .confirmation_handler(Arc::new(YesToEverything));
     }
     let agent = Arc::new(agent.build().unwrap());
-    let sessions: Arc<dyn SessionService> = Arc::new(sqlite);
     let runner = agent
         .configure_runner(
             Runner::builder()
@@ -243,14 +280,14 @@ async fn home_with(
                 .with_scheduler_tick(Duration::from_millis(50))
                 .with_control(control),
         )
-        .process_store(Arc::new(processes) as Arc<dyn ProcessStore>)
+        .process_store(processes)
         .build()
         .unwrap();
     kernel.start().await.unwrap();
     let source = LocalSource::builder(APP)
         .sessions(Arc::clone(&sessions))
         .approvals(Arc::clone(&service))
-        .harness(harness)
+        .harness(Arc::clone(&harness))
         .kernel(kernel.clone(), APP)
         .build()
         .unwrap();
@@ -269,7 +306,7 @@ async fn home_with(
             scopes: vec!["owner".into(), "operator".into()],
             metadata: Default::default(),
         })));
-    Home { kernel, engine, api }
+    Home { kernel, engine, api, harness }
 }
 
 /// `wipe_invoices`: the operator's policy never lets it run.
@@ -430,7 +467,29 @@ fn code(error: SurfaceError) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_drawn_form_is_sent_held_as_finance_and_runs_once_on_a_yes() {
-    let lasting = Lasting::new();
+    governed_form(Lasting::new()).await;
+}
+
+/// The same scenario on PostgreSQL, the shared store §12 asks for, with the restart over the
+/// same database. It needs an empty database of its own, so run it by hand:
+///
+/// ```text
+/// createdb -h localhost -U postgres genui_form
+/// DATABASE_URL=postgres://postgres:postgres@localhost:5432/genui_form \
+///   cargo nextest run -p adk-surface --features genui,web,tui --test genui_scenario_tests \
+///   --run-ignored only -E 'test(/on_postgres/)'
+/// dropdb -h localhost -U postgres genui_form
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs DATABASE_URL, an empty PostgreSQL database; run by hand"]
+async fn a_drawn_form_is_sent_held_and_runs_once_on_postgres() {
+    let url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL names an empty PostgreSQL database");
+    governed_form(Lasting::on_postgres(&url)).await;
+}
+
+/// Steps 1 to 6 of the scenario over `lasting`'s stores.
+async fn governed_form(lasting: Lasting) {
     let model = Arc::new(ScriptedLlm::new(
         "scripted",
         vec![
@@ -514,6 +573,42 @@ async fn a_drawn_form_is_sent_held_as_finance_and_runs_once_on_a_yes() {
         .await
         .unwrap();
 
+    // Step 4's other conditions: a standing rule the person made that allows `send_invoice`
+    // for Finance, and an approval of the identical call recorded before the send.
+    let origin = ToolOrigin::of(&SendInvoice { runs: Arc::clone(&lasting.runs) });
+    home1
+        .harness
+        .standing_rules()
+        .grant(StandingRule {
+            id: "rule-send-invoice".into(),
+            scope: RuleScope::User {
+                app_name: APP.into(),
+                user_id: OWNER.into(),
+                subject_kind: SubjectKind::Human,
+            },
+            tool: "send_invoice".into(),
+            origin: OriginPin::exact(&origin),
+            agent: None,
+            predicates: Vec::new(),
+            decision: StandingDecision::Allow,
+            created_by: SubjectRef::human(OWNER),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            label: "send invoices".into(),
+            source_fingerprint: None,
+        })
+        .await
+        .unwrap();
+    let identical = ToolConfirmationRequest::new(
+        "send_invoice",
+        json!({ "to": "ana@example.com", "amount": 4200, "invoice": "INV-10" }),
+    )
+    .with_acting_context(ActingContext::derived(APP, "finance", OWNER, SubjectKind::Human))
+    .with_origin(origin);
+    let store = home1.harness.agent().runtime().approval_store().clone();
+    let scope = ApprovalScope::new(APP, OWNER, "s1");
+    store.decide(&scope, &identical.fingerprint(), ToolApproval::approve()).await.unwrap();
+
     // 2. Submit from the web home, by pointer: it waits, whatever would answer for the person.
     let body = json!({
         "surface": "web",
@@ -528,6 +623,10 @@ async fn a_drawn_form_is_sent_held_as_finance_and_runs_once_on_a_yes() {
     assert_eq!(outcome["type"], "formSent");
     let cards = waiting(&home1.engine, 1).await;
     let card = &cards[0];
+    assert!(
+        !store.has_decision(&scope, &identical.fingerprint()).await.unwrap(),
+        "the approval recorded before the send is discarded, not used"
+    );
     assert_eq!(card.call.tool, "send_invoice");
     assert_eq!(
         card.call.args,

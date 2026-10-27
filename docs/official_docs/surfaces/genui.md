@@ -93,7 +93,9 @@ run side by side, so they need no approval in any mode.
 | `delete_surface` | Removes a surface from the thread |
 
 A form's action names one of the agent's own tools and its arguments, each a constant or a
-field's value:
+field's value. The render tools check the name against the tools the drawing agent's runtime
+gives them (`ToolContext::agent_tool_names`, which `LlmAgent` fills), so a form bound to a tool
+the agent lacks is refused when it is drawn, never after the person sends it:
 
 ```json
 {
@@ -176,11 +178,17 @@ The engine checks, in order:
    send again".
 4. The action is declared on that version, and the form was not sent already (`surface.invalid`).
 5. Each value fits its field's type and checks (`surface.invalid`).
+6. No turn of the thread is running and no input waits for one: "Couldn't send: your agent is
+   still working in this thread — send it when it's done" (`surface.invalid`), so the call's
+   run never writes the session beside another.
+7. No send of the same version is on its way to the agent: "Couldn't send: this form is being
+   sent already" (`surface.invalid`).
 
 The arguments come from the stored drawing: a constant such as `"invoice": "INV-10"` is
 never read from the request. The engine writes a `surface.drawn.submitted` audit record —
-`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, the call's `fingerprint`,
-`valuesDigest`, `callId` and `drawnBy`, never the values — and then asks for the call
+`sessionId`, `surfaceId`, `version`, `actionId`, `tool`, `argsDigest` (the audit trail's
+digest of the call's arguments, as the call's approval records carry it), `valuesDigest`,
+`callId` and `drawnBy`, never the values — and then asks for the call
 (`Source::request_call`). The answer is `formSent` with the call's ID; nothing has run.
 
 ### Held as the drawing agent
@@ -196,8 +204,10 @@ inside that agent's own runtime:
 
 The agent authorizes the call under its own policy, standing rules, acting context and
 approval store, as `GovernedCall::requested`, and the run ends without a model call. The
-model reads the call as the person's request and its answer as the person's line, never as a
-call it made itself. See
+model reads the call through a runtime notice of what the person did, never as a call it made
+itself and never as the person's own words: the arguments hold constants the agent drew, so
+they and the call's answer arrive inside `<untrusted-content>` blocks, and nothing is written
+in the person's name for long-term memory to quote. See
 [Calls a Person Asks For](../security/tool-authorization.md#calls-a-person-asks-for).
 
 | Situation | What happens |
