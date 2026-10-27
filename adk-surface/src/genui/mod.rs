@@ -8,7 +8,10 @@
 //! | `Validator` | Rule 5: the catalog, no secrets, no links, declared actions only, and no decision's words in any string a person reads, resolved on the server | `genui` |
 //! | `DrawToolset` | `render_form`, `render_card`, `render_table`, `render_screen`, `patch_surface`, `delete_surface` | `genui` |
 //! | `capabilities` | What this home claims of A2UI, AG-UI and MCP Apps, for the developer panel | `genui` |
+//! | `GenuiAgUi` | Drawings as AG-UI `a2ui-surface` activities, and a form's send forwarded by an AG-UI client, on adk-server's AG-UI runtime | `genui` |
 //! | The thread items ([`DrawnSurface`], [`RefusedDrawing`], [`DrawnSent`]) and [`form_states`] | What every surface shows of a drawing, and of a form sent | every build |
+//! | `McpAppsHost` | Apps from MCP servers in a thread, sandboxed on their own origin, which can never approve anything | `genui-apps` |
+//! | [`AppView`], [`AppOpen`] and the app's requests | What every surface shows of an app, and what the page relays for it | every build |
 //!
 //! A form's Send never runs a tool: [`Command::SubmitDrawn`](crate::Command::SubmitDrawn)
 //! asks for a call ([`adk_core::RequestedCall`]), which the drawing agent holds for the
@@ -23,6 +26,9 @@
 #[cfg(feature = "genui")]
 mod a2ui;
 #[cfg(feature = "genui")]
+mod ag_ui;
+mod app_view;
+#[cfg(feature = "genui")]
 mod capabilities;
 mod capabilities_wire;
 #[cfg(feature = "genui")]
@@ -32,6 +38,8 @@ mod draw;
 mod drawn;
 #[cfg(feature = "genui")]
 mod hints;
+#[cfg(feature = "genui-apps")]
+mod mcp_apps;
 mod status;
 #[cfg(feature = "genui")]
 mod submit;
@@ -48,6 +56,11 @@ pub use a2ui::{
     decode_jsonl, encode_jsonl, stable_id,
 };
 #[cfg(feature = "genui")]
+pub use ag_ui::{A2UI_ACTION_PROP, GenuiAgUi};
+pub use app_view::{
+    AppAnswer, AppBlockReason, AppError, AppMessageRequest, AppOpen, AppPrompt, AppRequest, AppView,
+};
+#[cfg(feature = "genui")]
 pub use capabilities::capabilities;
 pub use capabilities_wire::{
     CatalogView, Claim, ClaimScope, ClaimStatus, GenuiCapabilities, ProtocolClaims,
@@ -59,6 +72,11 @@ pub use draw::{DRAWN_STATE_KEY, DrawToolset, DrawnEnvelope, DrawnRecord, REFUSED
 pub use drawn::{
     DrawnActionView, DrawnArg, DrawnCheck, DrawnField, DrawnInput, DrawnKind, DrawnNode,
     DrawnOption, DrawnSent, DrawnSurface, FormState, FormStatus, RefusalKind, RefusedDrawing,
+};
+#[cfg(feature = "genui-apps")]
+pub use mcp_apps::{
+    AppServers, McpAppsHost, McpAppsHostBuilder, SURFACE_AUDIT_APP_BLOCKED,
+    SURFACE_AUDIT_APP_CALL_HELD, SURFACE_AUDIT_APP_CALL_REFUSED, SURFACE_AUDIT_APP_MESSAGE_SENT,
 };
 pub use status::form_states;
 #[cfg(feature = "genui")]
@@ -72,6 +90,8 @@ pub use validate::{
 #[cfg(feature = "genui")]
 pub use view::SHOWN_ROWS;
 
+#[cfg(feature = "genui")]
+pub(crate) use app_view::app_name;
 #[cfg(feature = "genui")]
 pub(crate) use hints::DrawnHints;
 pub(crate) use status::{is_requested, refused_on_resume, requested_via, sent};
