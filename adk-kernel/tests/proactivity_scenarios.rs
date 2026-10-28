@@ -6,7 +6,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -483,22 +483,32 @@ async fn a_consolidation_item_runs_only_after_a_person_approves_it_in_auto() {
 }
 
 /// The admitted processes of the default partition running now: `Running`, not a
-/// `kernel.wake` run, and not on their way to park.
+/// `kernel.wake` run, and not on their way to park. A run counts only when it is running
+/// both before and after the processes are read, so one that finished meanwhile is not
+/// counted beside the run that took its slot back.
 async fn admitted(world: &World) -> usize {
-    let mut count = 0;
-    for run in world.runs.list(RunFilter::default().states([RunState::Running])).await.unwrap() {
-        if run.target == adk_kernel::KERNEL_WAKE_TARGET {
-            continue;
-        }
-        let meta = world.processes.get(&run.run_id).await.unwrap();
+    let running = || async {
+        world
+            .runs
+            .list(RunFilter::default().states([RunState::Running]))
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|run| run.target != adk_kernel::KERNEL_WAKE_TARGET)
+            .map(|run| run.run_id)
+            .collect::<BTreeSet<_>>()
+    };
+    let mut admitted = BTreeSet::new();
+    for pid in running().await {
+        let meta = world.processes.get(&pid).await.unwrap();
         let parking = meta.as_ref().is_some_and(|meta| {
             meta.wake.is_some() || meta.suspend_requested || meta.suspended_by.is_some()
         });
         if !parking {
-            count += 1;
+            admitted.insert(pid);
         }
     }
-    count
+    admitted.intersection(&running().await).count()
 }
 
 /// K8: three background runs at the partition's quota of three; a typed message's run
