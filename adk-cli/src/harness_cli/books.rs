@@ -399,7 +399,14 @@ fn record_line(record: adk_core::audit_log::AuditRecord) -> adk_kernel::control:
     if let Some(agent) = agent {
         line = line.with_agent(agent);
     }
-    let tool = text(record.ext.get("tool")).or_else(|| {
+    // A folder rule's record names the tools it covers; its own pattern matches any name
+    // (spec 3.3 §8.2).
+    let covered = record
+        .ext
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| tools.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "));
+    let tool = covered.or_else(|| text(record.ext.get("tool"))).or_else(|| {
         matches!(record.kind, adk_core::audit_log::AuditRecordKind::ToolCall)
             .then(|| record.action.clone())
     });

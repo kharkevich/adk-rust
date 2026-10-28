@@ -855,8 +855,9 @@ pub(crate) fn rule_audit_fields(rule: &StandingRule, created_from_call_id: Optio
             (source.clone(), Some(declaration_digest.clone()))
         }
         OriginPin::AnyDeclaration { source } => (source.clone(), None),
+        OriginPin::ExactEach { source, .. } => (source.clone(), None),
     };
-    json!({
+    let mut fields = json!({
         "ruleId": rule.id,
         "ruleDigest": digest(&serde_json::to_value(rule).unwrap_or(Value::Null)),
         "subject": rule.scope.user_id(),
@@ -869,7 +870,14 @@ pub(crate) fn rule_audit_fields(rule: &StandingRule, created_from_call_id: Optio
         "expiresAt": rule.expires_at,
         "createdFromCallId": created_from_call_id,
         "by": rule.created_by.id,
-    })
+    });
+    // A folder rule names each tool it covers and the declaration it is pinned to, since
+    // its tool pattern matches any name (spec 3.3 §8.2).
+    if let OriginPin::ExactEach { declarations, .. } = &rule.origin {
+        fields["tools"] = json!(declarations.keys().collect::<Vec<_>>());
+        fields["declarationDigests"] = json!(declarations);
+    }
+    fields
 }
 
 #[async_trait]

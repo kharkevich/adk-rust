@@ -605,6 +605,10 @@ pub(crate) fn describe_rule(n: usize, rule: &StandingRule) -> String {
     let pin = match &rule.origin {
         OriginPin::Exact { source, .. } => format!("{source}, this declaration"),
         OriginPin::AnyDeclaration { source } => format!("{source}, any declaration"),
+        OriginPin::ExactEach { source, declarations } => format!(
+            "{source}, these declarations of {}",
+            declarations.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
+        ),
     };
     let expires = rule
         .expires_at
