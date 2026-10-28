@@ -166,8 +166,9 @@
 # The phone (spec 3.3 §5.4): Web Push, the phone's routes and "Confirm it's you", whose
 # webauthn-rs verifier links OpenSSL.
 2 adk-surface mobile doc
-# `adk-rust up --home-url` serving the phone on SQLite with a scripted model.
-2 adk-cli mobile,scripted-model
+# `adk-rust up --home-url` serving the phone on SQLite with a scripted model; with `voice`,
+# "Speak, glance, stop" (spec 3.3 §12 phase 5) on the same kernel.
+2 adk-cli mobile,voice,scripted-model
 # Voice and video (spec 3.3 §5.6): spoken answers through the engine, the voice conversation on
 # a scripted realtime model, the camera and screen gate; with `web`, the voice routes and
 # socket; with `tui`, the terminal's voice line.
@@ -181,12 +182,12 @@
 # every surface, the routes, the API contract, `/snooze`, a spoken snooze, the Telegram card
 # and the "One verb, three origins" scenario, whose tests need `web`, `tui` and `voice`
 # together; the terminal and voice parts alone; and `adk-rust up` hosting them on SQLite with a
-# scripted model.
+# scripted model, where text, click and voice leave signed records that differ only in how.
 2 adk-surface verb-ui doc
 2 adk-surface web,tui,voice,channels,verb-ui
 2 adk-surface tui,verb-ui
 2 adk-surface voice,verb-ui
-2 adk-cli verb-ui,scripted-model
+2 adk-cli verb-ui,voice,scripted-model,audit-sql
 # The workflow observer (spec 3.3 §12): runs, steps and forks of graph agents, card hints for
 # governed nodes, the fork command, and with `web` the Runs tab's routes, its API contract and
 # the "Approve, rewind, fork" scenario.

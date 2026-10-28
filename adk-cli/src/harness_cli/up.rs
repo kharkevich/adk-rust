@@ -30,6 +30,7 @@ use crate::ResolvedModel;
 use crate::cli::UpArgs;
 
 mod commands;
+mod held;
 #[cfg(feature = "mobile")]
 mod phone;
 #[cfg(feature = "channels")]
@@ -73,6 +74,10 @@ struct KernelStores {
 pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -> Result<()> {
     #[cfg(feature = "mobile")]
     let (home_url, push_key) = (up.home_url.clone(), up.push_key.clone());
+    #[cfg(all(feature = "mobile", feature = "scripted-model"))]
+    let push_to_localhost = up.push_to_localhost;
+    #[cfg(all(feature = "mobile", not(feature = "scripted-model")))]
+    let push_to_localhost = false;
     #[cfg(feature = "genui-apps")]
     let apps_origin = up.apps_origin.clone();
     let UpArgs { home, bind, auth_token, store, mut harness, .. } = up;
@@ -140,7 +145,16 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     // The phone at the home's public address (spec 3.3 §5.4).
     #[cfg(feature = "mobile")]
     let phone = match &home_url {
-        Some(url) => Some(phone::Phone::open(url, push_key.as_deref(), &home, token.as_deref())?),
+        Some(url) => {
+            let mut phone = phone::Phone::open(url, push_key.as_deref(), &home, token.as_deref())?;
+            if push_to_localhost {
+                phone.setup = phone.setup.with_push_allowlist(
+                    adk_surface::mobile::PushAllowlist::new(["localhost"])
+                        .with_plain_http_to_localhost(),
+                );
+            }
+            Some(phone)
+        }
         None => None,
     };
     if !bind.ip().is_loopback() && token.is_none() {
@@ -192,9 +206,12 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
     let routing = adk_surface::verbs::VerbRouter::catalogue(APP_NAME, routing);
     #[cfg(feature = "verb-ui")]
     let verb_approvals = approval_store.clone();
+    // Every held call on the kernel's bus, so the tray re-reads on it (spec 3.3 §12 phase 5).
+    let held = held::HeldDoorbell::default();
     let service = StoreApprovalService::new(approval_store)
         .with_router(routing)
-        .with_run_store(run_store.clone());
+        .with_run_store(run_store.clone())
+        .with_notifier(Arc::new(held.clone()));
     #[cfg(feature = "channels")]
     let service = match &chat {
         Some(chat) => service.with_notifier(chat.doorbell()),
@@ -607,6 +624,7 @@ pub async fn up(model: ResolvedModel, instruction: Option<String>, up: UpArgs) -
         }
     }
     let kernel = kernel.build()?;
+    held.attach(&kernel);
     // The inbox decides through the harness's approval service, which wakes the kernel's
     // approval sleepers; the service the builder was given would not.
     let decisions = primary
