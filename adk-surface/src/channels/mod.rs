@@ -22,10 +22,44 @@
 //! | Platform | Adapter | Transport |
 //! |---|---|---|
 //! | Telegram | [`TelegramAdapter`] | Bot API long polling (`getUpdates`): no inbound port, so the home stays on loopback (§13 decision 10) |
+//! | WhatsApp (`whatsapp`) | `WhatsAppAdapter` | The official WhatsApp Business Cloud API only: a webhook the host mounts on a public HTTPS address, every body's `X-Hub-Signature-256` checked before it is read; the Graph API out, and outside the 24-hour window only an approved template (spec 3.5 §10 X12) |
+//! | Slack (`slack`) | `SlackAdapter` | Socket Mode, a WebSocket the adapter opens, every envelope acknowledged; the Web API with Block Kit out; no inbound port |
+//! | Discord (`discord`) | `DiscordAdapter` | The Gateway WebSocket with heartbeat, resume and reconnect; REST with button components out, `allowed_mentions: {"parse": []}`; no inbound port |
+//! | Matrix (`matrix`) | `MatrixAdapter` | `/sync` long polling with the `since` token; `m.room.message` out. No buttons: a card's answers are reaction keys, and only the paired account's reaction on that card answers it; unencrypted direct chats only; no inbound port |
 
+#[cfg(feature = "discord")]
+mod discord;
+#[cfg(feature = "matrix")]
+mod matrix;
+#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
+mod shared;
+#[cfg(feature = "slack")]
+mod slack;
 mod telegram;
+#[cfg(feature = "whatsapp")]
+mod whatsapp;
 
+#[cfg(feature = "discord")]
+pub use discord::{
+    DISCORD, DISCORD_CHANNEL, DiscordAdapter, DiscordAdapterBuilder, DiscordConnection,
+    DiscordError,
+};
+#[cfg(feature = "matrix")]
+pub use matrix::{
+    MATRIX, MATRIX_CHANNEL, MatrixAdapter, MatrixAdapterBuilder, MatrixError, MatrixSync,
+};
+#[cfg(any(feature = "whatsapp", feature = "slack", feature = "discord", feature = "matrix"))]
+pub use shared::ChannelConnection;
+#[cfg(feature = "slack")]
+pub use slack::{
+    SLACK, SLACK_CHANNEL, SlackAdapter, SlackAdapterBuilder, SlackConnection, SlackError,
+};
 pub use telegram::{
     TELEGRAM, TELEGRAM_CHANNEL, TelegramAdapter, TelegramAdapterBuilder, TelegramError,
     TelegramPolling,
+};
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::{
+    WHATSAPP, WHATSAPP_CHANNEL, WhatsAppAdapter, WhatsAppAdapterBuilder, WhatsAppError,
+    WhatsAppWebhook,
 };
