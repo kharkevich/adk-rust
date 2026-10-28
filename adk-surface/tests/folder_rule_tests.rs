@@ -22,28 +22,31 @@ const WITHIN: Duration = Duration::from_secs(15);
 /// comes.
 fn script() -> Arc<ScriptedLlm> {
     let call = ScriptedResponse::function_call;
-    Arc::new(ScriptedLlm::new(
-        "scripted",
-        vec![
-            call("write_file", json!({ "path": "notes/a.md", "content": "draft" })),
-            call("write_file", json!({ "path": "notes/b.md", "content": "second" })),
-            call("read_file", json!({ "path": "notes/a.md" })),
-            call(
-                "edit_file",
-                json!({ "path": "notes/a.md", "old_string": "draft", "new_string": "final" }),
-            ),
-            call("write_file", json!({ "path": "notes/deep/c.md", "content": "nested" })),
-            call("write_file", json!({ "path": "elsewhere.md", "content": "outside" })),
-            call("write_file", json!({ "path": "notes/../escape.md", "content": "escape" })),
-            call("write_file", json!({ "path": "notes/out/link.md", "content": "symlink" })),
-            call(
-                "apply_patch",
-                json!({ "patch": "*** Begin Patch\n*** Delete File: notes/b.md\n*** End Patch" }),
-            ),
-            call("bash", json!({ "command": "ls notes" })),
-            ScriptedResponse::text("Done."),
-        ],
-    ))
+    let mut calls = vec![
+        call("write_file", json!({ "path": "notes/a.md", "content": "draft" })),
+        call("write_file", json!({ "path": "notes/b.md", "content": "second" })),
+        call("read_file", json!({ "path": "notes/a.md" })),
+        call(
+            "edit_file",
+            json!({ "path": "notes/a.md", "old_string": "draft", "new_string": "final" }),
+        ),
+        call("write_file", json!({ "path": "notes/deep/c.md", "content": "nested" })),
+        call("write_file", json!({ "path": "elsewhere.md", "content": "outside" })),
+        call("write_file", json!({ "path": "notes/../escape.md", "content": "escape" })),
+    ];
+    // `notes/out` is a symlink out of the workspace where the test can make one.
+    if cfg!(unix) {
+        calls.push(call("write_file", json!({ "path": "notes/out/link.md", "content": "x" })));
+    }
+    calls.extend([
+        call(
+            "apply_patch",
+            json!({ "patch": "*** Begin Patch\n*** Delete File: notes/b.md\n*** End Patch" }),
+        ),
+        call("bash", json!({ "command": "ls notes" })),
+        ScriptedResponse::text("Done."),
+    ]);
+    Arc::new(ScriptedLlm::new("scripted", calls))
 }
 
 /// A card waiting for the person that is not in `answered`, or `None` once the turn has

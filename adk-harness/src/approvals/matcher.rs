@@ -910,10 +910,7 @@ mod tests {
         use serde_json::json;
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.join("notes")).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.path(), root.join("notes/out")).unwrap();
         let patch =
             |text: &str| json!({ "patch": format!("*** Begin Patch\n{text}\n*** End Patch") });
 
@@ -933,7 +930,6 @@ mod tests {
             ("write_file", json!({ "path": "notesx/a.md" })),
             ("write_file", json!({ "path": "notes/../a.md" })),
             ("write_file", json!({ "path": "/etc/passwd" })),
-            ("write_file", json!({ "path": "notes/out/a.md" })),
             ("write_file", json!({ "path": "notes/AGENTS.md" })),
             ("write_file", json!({ "path": "notes/.git/config" })),
             ("apply_patch", patch("*** Delete File: notes/a.md")),
@@ -944,6 +940,14 @@ mod tests {
             ("apply_patch", patch("*** Add File: notes/a.md\n+x\n*** Add File: other/b.md\n+y")),
         ] {
             assert!(!folder_rule_matches(&root, tool, &args, ToolKind::Edit), "{tool} {args}");
+        }
+        // A symlink out of the folder, to a directory outside the workspace.
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("notes/out")).unwrap();
+            let escape = json!({ "path": "notes/out/a.md" });
+            assert!(!folder_rule_matches(&root, "write_file", &escape, ToolKind::Edit));
         }
         // The shell and other classes, whatever their arguments name.
         let shell = json!({ "command": "touch notes/a.md", "path": "notes/a.md" });
