@@ -14,7 +14,9 @@ use tokio::sync::Mutex;
 
 use super::changeset::{ChangeSetAnswer, ChangeSetPrompt};
 use super::matcher::glob_matches;
-use super::rule::{OriginPin, RuleOwner, RuleSuggestion, StandingDecision, StandingRule};
+use super::rule::{
+    OriginPin, RuleOwner, RulePredicate, RuleSuggestion, StandingDecision, StandingRule,
+};
 use super::store::StandingRuleStore;
 use crate::mode::HarnessMode;
 use crate::policy::{HarnessPolicy, PromptContext, ToolKind};
@@ -871,11 +873,22 @@ pub(crate) fn rule_audit_fields(rule: &StandingRule, created_from_call_id: Optio
         "createdFromCallId": created_from_call_id,
         "by": rule.created_by.id,
     });
-    // A folder rule names each tool it covers and the declaration it is pinned to, since
-    // its tool pattern matches any name (spec 3.3 §8.2).
+    // A folder rule's tool pattern matches any name, so its record keeps each tool and the
+    // declaration it is pinned to as data, and says what it covers in the words a person
+    // reads (spec 3.3 §8.2).
     if let OriginPin::ExactEach { declarations, .. } = &rule.origin {
         fields["tools"] = json!(declarations.keys().collect::<Vec<_>>());
         fields["declarationDigests"] = json!(declarations);
+    }
+    let folder = rule.predicates.iter().find_map(|predicate| {
+        if let RulePredicate::WritesWithin { dir } = predicate { Some(dir) } else { None }
+    });
+    if let Some(dir) = folder {
+        fields["covers"] = json!(if dir == "." {
+            "file writes anywhere in the workspace".to_string()
+        } else {
+            format!("file writes in {dir}/")
+        });
     }
     fields
 }

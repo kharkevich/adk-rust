@@ -260,7 +260,7 @@ the folder the held call writes in — the workspace root for a file there — f
 | Origin | `OriginPin::ExactEach`: `write_file`, `edit_file` and `apply_patch`, each at the declaration the harness gives it |
 | Predicate | `WritesWithin { dir }`: the call only writes files, and every path it writes lies within `dir` as `PathWithin` resolves it |
 | Label | `file writes: within notes/`, or `file writes: anywhere in the workspace` |
-| Record | `harness.rule.created` names the covered tools in `tools` and their digests in `declarationDigests` |
+| Record | `harness.rule.created` says what the rule covers in `covers` (`file writes in notes/`), which "What your agents did" shows as "You allowed file writes in notes/ without asking."; the covered tools stay in `tools` and their digests in `declarationDigests` |
 
 The set is the harness's Edit-class tools by their declared effects: `write_file` creates or
 replaces a file and `edit_file` changes one, so every call of theirs is a write;

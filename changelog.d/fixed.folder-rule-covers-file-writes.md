@@ -6,5 +6,6 @@
   new `RulePredicate::WritesWithin`; `HarnessAgent::folder_suggestion` builds it. Writes
   outside the folder, `..` and symlink escapes, deletes, moves, the shell and other tools still
   ask. The button reads "Always allow for this folder (file writes anywhere in notes/, this
-  session)", the home says "Your agents can write files within notes/, in one conversation.",
-  and the `harness.rule.created` record names the covered tools (spec 3.3 §8.2).
+  session)", the home says "Your agents can write files within notes/, in one conversation."
+  and "You allowed file writes in notes/ without asking.", and the `harness.rule.created`
+  record keeps the covered tools as data (spec 3.3 §8.2).

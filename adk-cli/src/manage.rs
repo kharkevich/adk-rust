@@ -514,10 +514,7 @@ fn describe(n: usize, rule: &StandingRule) -> String {
             format!("{source} {}", &declaration_digest[..declaration_digest.len().min(19)])
         }
         OriginPin::AnyDeclaration { source } => format!("{source}, any declaration"),
-        OriginPin::ExactEach { source, declarations } => format!(
-            "{source}, these declarations of {}",
-            declarations.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
-        ),
+        OriginPin::ExactEach { source, .. } => format!("{source}, each covered tool's declaration"),
     };
     let expires = rule
         .expires_at

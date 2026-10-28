@@ -147,6 +147,8 @@ async fn always_allow_for_this_folder_covers_every_file_write_in_it() {
     let created = records(&s, "harness.rule.created");
     assert_eq!(created.len(), 1, "{created:?}");
     assert_eq!(created[0].ext["tools"], json!(["apply_patch", "edit_file", "write_file"]));
+    // What a person reads of the record: what the rule covers, in plain words.
+    assert_eq!(created[0].ext["covers"], "file writes in notes/");
     assert_eq!(created[0].ext["surface"], "web");
     s.kernel.stop().await.unwrap();
 }
