@@ -1656,7 +1656,7 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     terminal.send("a");
     expect_screen(&terminal, "Wrote a.");
     assert_eq!(std::fs::read_to_string(ws.path().join("a.txt")).unwrap(), "A");
-    command(&mut terminal, "/rules", &["allow write_file"]);
+    command(&mut terminal, "/rules", &["allow file writes: anywhere in the workspace"]);
 
     // In ask mode a write waits for a key; the rule lets this one run.
     terminal.send("Write b\r");
@@ -1668,7 +1668,7 @@ fn the_repls_commands_and_always_allow_run_on_the_kernel() {
     terminal.send("\x0b");
     expect_screen(&terminal, "stopped");
     command(&mut terminal, "/web allow docs.rs", &["everything is stopped"]);
-    command(&mut terminal, "/rules", &["allow write_file"]);
+    command(&mut terminal, "/rules", &["allow file writes: anywhere in the workspace"]);
     command(&mut terminal, "/rules rm 1", &["revoked:"]);
     command(&mut terminal, "/rules", &["No standing rules."]);
     terminal.send("\x03");
@@ -1734,7 +1734,7 @@ fn live_model_always_allow_and_rules_in_the_full_screen() {
         std::thread::sleep(Duration::from_millis(100));
     }
     std::thread::sleep(Duration::from_secs(3));
-    let parser = command(&mut terminal, "/rules", &["allow write_file"]);
+    let parser = command(&mut terminal, "/rules", &["allow file writes"]);
     dump("live-rules-dark", &parser);
     terminal.send("\x03");
     assert_eq!(terminal.wait().0, Some(0));
